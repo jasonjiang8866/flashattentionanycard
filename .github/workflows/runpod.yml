@@ -1,0 +1,53 @@
+name: RunPod image and offline validation
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the verified image to GHCR
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: |
+          for script in runpod/*.sh; do bash -n "$script"; done
+      - uses: docker/setup-buildx-action@v3
+      - name: Build pinned CUDA-wheel environment
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: runpod/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ghcr.io/${{ github.repository_owner }}/flashattentionanycard-runpod:sha-${{ github.sha }}
+          build-args: SOURCE_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=runpod
+          cache-to: type=gha,mode=max,scope=runpod
+      - name: Verify package environment and complete offline suite (no GPU)
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/flashattentionanycard-runpod:sha-${{ github.sha }}
+        run: |
+          docker run --rm --entrypoint /opt/venv/bin/python "$IMAGE" -m pip check
+          docker run --rm --entrypoint /bin/bash "$IMAGE" runpod/run.sh smoke --dry-run
+          docker run --rm --entrypoint /opt/venv/bin/python "$IMAGE" -m pytest -q -m 'not gpu'
+      - name: Log in to GHCR for explicitly requested publication
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish verified immutable-revision tag
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/flashattentionanycard-runpod:sha-${{ github.sha }}
+        run: docker push "$IMAGE"
