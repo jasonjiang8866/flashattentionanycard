@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bo-kernel-tuner"
+version = "0.1.0"
+description = "Reproducible hardware-aware Triton kernel search and cross-GPU warm starts"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.9,<3", "triton>=3.5,<4; sys_platform == 'linux'",
+  "optuna>=4.5,<6", "pandas>=2.2,<4", "matplotlib>=3.8,<4",
+  "seaborn>=0.13,<1", "typer>=0.12,<1", "rich>=13,<15",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.11"]
+
+[project.scripts]
+bo-kernel-tuner = "bo_kernel_tuner.run_benchmark:app"
+bo-kernel-plots = "bo_kernel_tuner.analysis.plot_metrics:app"
+
+[tool.setuptools.packages.find]
+include = ["bo_kernel_tuner*"]
+
+[tool.pytest.ini_options]
+testpaths = ["bo_kernel_tuner/tests"]
+markers = ["gpu: requires a supported NVIDIA CUDA GPU and Triton",
+           "compile: offline Triton compilation; no CUDA execution"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+ignore = ["E731"]
+
