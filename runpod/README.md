@@ -10,7 +10,7 @@ bootstrap 的独立 Python 环境也默认保存在 `/workspace`。
 
 ```bash
 cd /workspace
-git clone --branch feat/runpod-experiments \
+git clone --branch main \
   https://github.com/jasonjiang8866/flashattentionanycard.git
 cd flashattentionanycard
 bash runpod/bootstrap.sh smoke \
@@ -146,10 +146,39 @@ Pod 启动后自动跑一次实验，随后保持容器运行以便取回文件�
 | `BO_VENV_DIR` | bootstrap 的自定义 venv 位置 |
 | `BO_PYTHON` | 运行脚本使用的 Python；Docker 中为 `/opt/venv/bin/python` |
 
-GitHub Actions 的 **RunPod image and offline validation** 工作流会构建镜像并在容器内执行离线测试。
-手动执行该 workflow 并勾选 `publish` 才推送 GHCR，镜像名为
-`ghcr.io/jasonjiang8866/flashattentionanycard-runpod:sha-<完整commit SHA>`。
-确认发布成功后再填入 RunPod；GHCR package 若为私有，需配置 registry 凭据或自行设为公开。
+### 通过 GitHub Actions 显式发布 GHCR
+
+必须先将本工作流及 Docker 环境经 PR 检查、审核和正常合并进入默认分支 `main`，
+GitHub 才提供 `workflow_dispatch` 入口。不要为解决入口问题启用 PR 自动发布。
+普通 PR 和 `publish=false` 仅有 `contents: read`；仅显式发布 job 具有 `packages: write`。
+GitHub 要求操作者有仓库写权限；本流程不绕过分支保护、review 或 GHCR package 权限。
+发布只接受默认分支及操作者确认的完整 SHA；若分支在确认后发生变化，校验失败，应重新审核新 SHA。
+
+在已登录、具有仓库写权限的 GitHub CLI 中执行（只发布镜像，不创建或启动 Pod）：
+
+```bash
+REPO=jasonjiang8866/flashattentionanycard
+SHA="$(gh api "repos/$REPO/commits/main" --jq .sha)"
+printf 'Review this revision before publication: %s\n' "$SHA"
+gh workflow run runpod.yml --repo "$REPO" --ref main \
+  -f publish=true -f expected_sha="$SHA"
+gh run list --repo "$REPO" --workflow runpod.yml --event workflow_dispatch --limit 5
+```
+
+也可在 Actions → **RunPod image and offline validation** → Run workflow 中选择 `main`，
+勾选 `publish`，在 `expected_sha` 填入审核过的完整 SHA。默认 `publish=false`。
+发布 job 构建镜像，执行 `pip check`、smoke dry-run 和完整离线测试，再登录并推送；
+随后核对远端 SHA 标签指向的 digest、按 digest 拉取并检查镜像 revision label。
+运行 Summary 与 `runpod-publication-<SHA>` artifact 保存实际标签、digest 和验证证据。
+
+**尚未记录已发布镜像时，请使用第 1 节 bootstrap 路径，不要将占位标签填入 RunPod。**
+该路径已通过离线脚本/编排测试；真实 CUDA smoke 仍需在目标 GPU 上执行。
+发布失败时同样保留 bootstrap 路径，无需预发布 GHCR 镜像。
+
+发布成功后，从该次 Summary 复制 `Immutable reference` 到 RunPod 的 **Container Image**。
+SHA 标签为 `ghcr.io/jasonjiang8866/flashattentionanycard-runpod:sha-<完整 SHA>`；
+标签本身可被重推覆盖，正式实验应固定 `ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:<digest>`。
+GHCR package 若为私有，需配置具有读取权限的 registry 凭据；不要假定仓库公开就代表镜像公开。
 CI 的 Docker 构建/离线编译通过仍不等于真实 GPU 实验已通过。
 
 ## 官方参考

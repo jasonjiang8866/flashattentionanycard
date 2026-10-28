@@ -4,19 +4,72 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the verified image to GHCR
+        description: Publish the verified default-branch image to GHCR
         type: boolean
         default: false
+      expected_sha:
+        description: Full reviewed default-branch commit SHA (required for publication)
+        type: string
+        default: ''
 permissions:
   contents: read
 jobs:
   image:
+    # PRs and validation-only dispatches never receive package write permission.
+    if: github.event_name != 'workflow_dispatch' || !inputs.publish
     runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check shell syntax
+        run: |
+          for script in runpod/*.sh; do bash -n "$script"; done
+      - uses: docker/setup-buildx-action@v3
+      - name: Build pinned CUDA-wheel environment
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: runpod/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ghcr.io/${{ github.repository_owner }}/flashattentionanycard-runpod:sha-${{ github.sha }}
+          build-args: SOURCE_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=runpod
+          cache-to: type=gha,mode=max,scope=runpod
+      - name: Verify package environment and complete offline suite (no GPU)
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/flashattentionanycard-runpod:sha-${{ github.sha }}
+        run: |
+          docker run --rm --entrypoint /opt/venv/bin/python "$IMAGE" -m pip check
+          docker run --rm --entrypoint /bin/bash "$IMAGE" runpod/run.sh smoke --dry-run
+          docker run --rm --entrypoint /opt/venv/bin/python "$IMAGE" -m pytest -q -m 'not gpu'
+  authorize-publication:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the explicitly reviewed default-branch revision
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+  publish:
+    needs: authorize-publication
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: runpod-ghcr-publication
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Check shell syntax
         run: |
           for script in runpod/*.sh; do bash -n "$script"; done
@@ -40,14 +93,37 @@ jobs:
           docker run --rm --entrypoint /bin/bash "$IMAGE" runpod/run.sh smoke --dry-run
           docker run --rm --entrypoint /opt/venv/bin/python "$IMAGE" -m pytest -q -m 'not gpu'
       - name: Log in to GHCR for explicitly requested publication
-        if: github.event_name == 'workflow_dispatch' && inputs.publish
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish verified immutable-revision tag
-        if: github.event_name == 'workflow_dispatch' && inputs.publish
+      - name: Publish and verify the revision tag and registry digest
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/flashattentionanycard-runpod:sha-${{ github.sha }}
-        run: docker push "$IMAGE"
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE" | tee push.log
+          digest="$(sed -nE 's/.*digest: (sha256:[0-9a-f]{64}).*/\1/p' push.log | tail -1)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          pinned="${IMAGE%:*}@$digest"
+          docker buildx imagetools inspect "$IMAGE" > registry-manifest.txt
+          grep -Eq "^Digest:[[:space:]]+$digest$" registry-manifest.txt
+          docker pull "$pinned"
+          revision="$(docker image inspect "$pinned" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+          test "$revision" = "$GITHUB_SHA"
+          {
+            echo '## Verified GHCR publication (offline tests only)'
+            echo "Source revision: $GITHUB_SHA"
+            echo "SHA tag: $IMAGE"
+            echo "Immutable reference: $pinned"
+            echo 'Real CUDA correctness and performance remain unverified.'
+          } | tee publication.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain publication evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: runpod-publication-${{ github.sha }}
+          path: |
+            publication.txt
+            push.log
+            registry-manifest.txt

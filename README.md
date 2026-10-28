@@ -9,7 +9,7 @@
 ## RunPod 一键实验
 
 已提供 [RunPod 脚本、固定依赖 Dockerfile 和完整操作说明](runpod/README.md)。
-在 RunPod GPU Pod 中检出本分支后执行：
+在 RunPod GPU Pod 中检出 `main` 后执行：
 
 ```bash
 bash runpod/bootstrap.sh smoke --output /workspace/bo-kernel-tuner/results/smoke-01
@@ -26,8 +26,7 @@ bash runpod/bootstrap.sh smoke --output /workspace/bo-kernel-tuner/results/smoke
 ```bash
 git clone https://github.com/jasonjiang8866/flashattentionanycard.git
 cd flashattentionanycard
-# PR 尚未合并时使用实现分支：
-git switch feat/runpod-experiments
+git switch main
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
