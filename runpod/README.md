@@ -171,9 +171,35 @@ gh run list --repo "$REPO" --workflow runpod.yml --event workflow_dispatch --lim
 随后核对远端 SHA 标签指向的 digest、按 digest 拉取并检查镜像 revision label。
 运行 Summary 与 `runpod-publication-<SHA>` artifact 保存实际标签、digest 和验证证据。
 
-**尚未记录已发布镜像时，请使用第 1 节 bootstrap 路径，不要将占位标签填入 RunPod。**
-该路径已通过离线脚本/编排测试；真实 CUDA smoke 仍需在目标 GPU 上执行。
-发布失败时同样保留 bootstrap 路径，无需预发布 GHCR 镜像。
+### 已发布镜像（2026-10-28）
+
+[手动发布与核验记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/40636599094)
+已成功完成镜像构建、`pip check`、smoke dry-run、**75 项离线测试（19 项 GPU 测试未选中）**、
+GHCR 推送、远端 SHA 标签到 digest 的匹配检查，以及按 digest 拉取后的 revision label 检查。
+这不是 CUDA 推理或算子性能验证，尚无真实 GPU 实验结果。
+
+- 源码 SHA：`93e5e2a410ad10b50cecb4d40d5a3ed91318fe96`。
+- SHA 标签：`ghcr.io/jasonjiang8866/flashattentionanycard-runpod:sha-93e5e2a410ad10b50cecb4d40d5a3ed91318fe96`。
+- 不可变 digest：`sha256:7898bfaf4b1a736ad6216d4f4306bd401598eb7c9e118a72359414b0d03e981d`。
+- 发布证据：该次运行保存的 `runpod-publication-93e5e2a410ad10b50cecb4d40d5a3ed91318fe96` artifact。
+
+可直接复制到 RunPod 自定义模板的 **Container Image**：
+
+```text
+ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:7898bfaf4b1a736ad6216d4f4306bd401598eb7c9e118a72359414b0d03e981d
+```
+
+可在有 Docker 的机器上提前拉取（此命令不启动容器或 GPU）：
+
+```bash
+docker pull ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:7898bfaf4b1a736ad6216d4f4306bd401598eb7c9e118a72359414b0d03e981d
+```
+
+模板其余配置沿用本节的 `/workspace` 挂载、默认 CMD 和 `BO_SUITE=smoke`。
+本次核对 [GHCR package](https://github.com/jasonjiang8866/flashattentionanycard/pkgs/container/flashattentionanycard-runpod) 为 **Public**，可匿名拉取；
+若未来改为私有，则需配置具有此 package 读取权限的 registry 凭据。
+无 GHCR 访问权限或后续发布失败时，继续使用第 1 节的 bootstrap 路径；它不依赖预发布镜像。
+bootstrap 已通过离线脚本/编排测试，真实 CUDA smoke 仍需在目标 GPU 上执行。
 
 发布成功后，从该次 Summary 复制 `Immutable reference` 到 RunPod 的 **Container Image**。
 SHA 标签为 `ghcr.io/jasonjiang8866/flashattentionanycard-runpod:sha-<完整 SHA>`；
