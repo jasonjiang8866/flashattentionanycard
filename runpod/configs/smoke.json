@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "seeds": [
+    0
+  ],
+  "measurement": {
+    "warmup": 5,
+    "repeats": 7,
+    "batch": 8,
+    "validation_seeds": 2
+  },
+  "trial_timeout": 180,
+  "cases": [
+    {
+      "id": "gemm_fp16",
+      "workload": {
+        "kernel": "gemm",
+        "dtype": "fp16",
+        "m": 127,
+        "n": 193,
+        "k": 257,
+        "expert_tokens": [
+          0,
+          1,
+          17,
+          65
+        ]
+      },
+      "profile": "smoke",
+      "trials": 2,
+      "startup_trials": 1
+    },
+    {
+      "id": "gemm_bf16",
+      "workload": {
+        "kernel": "gemm",
+        "dtype": "bf16",
+        "m": 127,
+        "n": 193,
+        "k": 257,
+        "expert_tokens": [
+          0,
+          1,
+          17,
+          65
+        ]
+      },
+      "profile": "smoke",
+      "trials": 2,
+      "startup_trials": 1
+    },
+    {
+      "id": "rmsnorm_fp16",
+      "workload": {
+        "kernel": "rmsnorm",
+        "dtype": "fp16",
+        "m": 127,
+        "n": 193,
+        "k": 257,
+        "expert_tokens": [
+          0,
+          1,
+          17,
+          65
+        ]
+      },
+      "profile": "smoke",
+      "trials": 2,
+      "startup_trials": 1
+    },
+    {
+      "id": "rmsnorm_bf16",
+      "workload": {
+        "kernel": "rmsnorm",
+        "dtype": "bf16",
+        "m": 127,
+        "n": 193,
+        "k": 257,
+        "expert_tokens": [
+          0,
+          1,
+          17,
+          65
+        ]
+      },
+      "profile": "smoke",
+      "trials": 2,
+      "startup_trials": 1
+    },
+    {
+      "id": "moe_grouped_gemm_fp16",
+      "workload": {
+        "kernel": "moe_grouped_gemm",
+        "dtype": "fp16",
+        "m": 127,
+        "n": 193,
+        "k": 257,
+        "expert_tokens": [
+          0,
+          1,
+          17,
+          65
+        ]
+      },
+      "profile": "smoke",
+      "trials": 2,
+      "startup_trials": 1
+    },
+    {
+      "id": "moe_grouped_gemm_bf16",
+      "workload": {
+        "kernel": "moe_grouped_gemm",
+        "dtype": "bf16",
+        "m": 127,
+        "n": 193,
+        "k": 257,
+        "expert_tokens": [
+          0,
+          1,
+          17,
+          65
+        ]
+      },
+      "profile": "smoke",
+      "trials": 2,
+      "startup_trials": 1
+    }
+  ]
+}

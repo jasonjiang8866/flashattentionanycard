@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "measurement": {
+    "warmup": 20,
+    "repeats": 30,
+    "batch": 32,
+    "validation_seeds": 2
+  },
+  "trial_timeout": 180,
+  "cases": [
+    {
+      "id": "gemm_fp16",
+      "workload": {
+        "kernel": "gemm",
+        "dtype": "fp16",
+        "m": 2048,
+        "n": 2048,
+        "k": 2048,
+        "expert_tokens": [
+          0,
+          16,
+          64,
+          256,
+          1024,
+          32,
+          8,
+          128
+        ]
+      },
+      "profile": "full",
+      "trials": 50,
+      "startup_trials": 10
+    },
+    {
+      "id": "gemm_bf16",
+      "workload": {
+        "kernel": "gemm",
+        "dtype": "bf16",
+        "m": 2048,
+        "n": 2048,
+        "k": 2048,
+        "expert_tokens": [
+          0,
+          16,
+          64,
+          256,
+          1024,
+          32,
+          8,
+          128
+        ]
+      },
+      "profile": "full",
+      "trials": 50,
+      "startup_trials": 10
+    },
+    {
+      "id": "rmsnorm_fp16",
+      "workload": {
+        "kernel": "rmsnorm",
+        "dtype": "fp16",
+        "m": 16384,
+        "n": 8192,
+        "k": 2048,
+        "expert_tokens": [
+          0,
+          16,
+          64,
+          256,
+          1024,
+          32,
+          8,
+          128
+        ]
+      },
+      "profile": "full",
+      "trials": 12,
+      "startup_trials": 3
+    },
+    {
+      "id": "rmsnorm_bf16",
+      "workload": {
+        "kernel": "rmsnorm",
+        "dtype": "bf16",
+        "m": 16384,
+        "n": 8192,
+        "k": 2048,
+        "expert_tokens": [
+          0,
+          16,
+          64,
+          256,
+          1024,
+          32,
+          8,
+          128
+        ]
+      },
+      "profile": "full",
+      "trials": 12,
+      "startup_trials": 3
+    },
+    {
+      "id": "moe_grouped_gemm_fp16",
+      "workload": {
+        "kernel": "moe_grouped_gemm",
+        "dtype": "fp16",
+        "m": 2048,
+        "n": 2048,
+        "k": 2048,
+        "expert_tokens": [
+          0,
+          16,
+          64,
+          256,
+          1024,
+          32,
+          8,
+          128
+        ]
+      },
+      "profile": "full",
+      "trials": 50,
+      "startup_trials": 10
+    },
+    {
+      "id": "moe_grouped_gemm_bf16",
+      "workload": {
+        "kernel": "moe_grouped_gemm",
+        "dtype": "bf16",
+        "m": 2048,
+        "n": 2048,
+        "k": 2048,
+        "expert_tokens": [
+          0,
+          16,
+          64,
+          256,
+          1024,
+          32,
+          8,
+          128
+        ]
+      },
+      "profile": "full",
+      "trials": 50,
+      "startup_trials": 10
+    }
+  ]
+}

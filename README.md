@@ -6,6 +6,18 @@
 
 **验证状态：CPU 回归与离线代码生成可自动验证；真实 GPU 精度、吞吐和迁移收益必须在目标 GPU 上测量。仓库不包含虚构的 GPU benchmark 结果。**
 
+## RunPod 一键实验
+
+已提供 [RunPod 脚本、固定依赖 Dockerfile 和完整操作说明](runpod/README.md)。
+在 RunPod GPU Pod 中检出 `main` 后执行：
+
+```bash
+bash runpod/bootstrap.sh smoke --output /workspace/bo-kernel-tuner/results/smoke-01
+```
+
+默认验证全部 GPU 测试，并完成三个算子的 FP16/BF16 小规模对照、出图和结果打包。
+`performance`、跨 GPU warm-start 及经过产物校验的 study 级恢复见上述文档。
+
 ## 安装
 
 使用独立 Python 3.10+ 环境。安装与驱动兼容、包含目标 GPU 架构的 PyTorch CUDA wheel，再安装本项目。
@@ -14,8 +26,7 @@
 ```bash
 git clone https://github.com/jasonjiang8866/flashattentionanycard.git
 cd flashattentionanycard
-# PR 尚未合并时使用实现分支：
-git switch feat/bo-kernel-tuner
+git switch main
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
