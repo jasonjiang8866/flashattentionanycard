@@ -48,7 +48,7 @@ bash runpod/run.sh performance --device 0 \
 | `performance` 加迁移 | 上述配置 + warm TPE | 5 | 120 | 4,480 |
 
 预算受控的 RTX 3090/5090 探索方案、dry-run、独立主机运行与迁移步骤见 [PILOT.md](PILOT.md)。
-现有已发布镜像不包含新增 pilot；需使用包含本配置的源码或后续新镜像。默认入口仍为 smoke。
+2026-10-30 发布镜像已包含 pilot、完整运行计时与新增验证/恢复检查，固定引用见下文。默认入口仍为 smoke。
 
 smoke 验证执行链路，不能证明 TPE 的收敛优势。performance 包含每个 GEMM/MoE study 50 attempts、RMSNorm 12 attempts；
 每次都独立启动进程并冷编译，完整实验可能耗时数小时，具体以 GPU、编译和测量时间为准。
@@ -177,7 +177,54 @@ gh run list --repo "$REPO" --workflow runpod.yml --event workflow_dispatch --lim
 随后核对远端 SHA 标签指向的 digest、按 digest 拉取并检查镜像 revision label。
 运行 Summary 与 `runpod-publication-<SHA>` artifact 保存实际标签、digest 和验证证据。
 
-### 已发布镜像（2026-10-28）
+### 当前 pilot 镜像（2026-10-30）
+
+[手动发布与核验记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41028932034) 使用已合并的 main 源码，
+`publish=true`、默认分支和完整 `expected_sha` 门禁均通过。发布前完成 `pip check`、
+smoke dry-run 和 **106 项完整离线测试（19 项 GPU 测试未选中）**；
+发布后核对远端 SHA 标签与 digest，并按 digest 拉取检查 revision label。
+离线 suite 包含 cold/warm pilot 的无 CUDA dry-run、预算、路径无写入、计时与恢复检查。
+这些检查不代表 CUDA 正确性、性能或实际 GPU warm-start 已通过。
+
+- 源码 SHA / `org.opencontainers.image.revision`：`14118cbec5aba88654232b1a2f232be4ca35d1db`。
+- SHA 标签：`ghcr.io/jasonjiang8866/flashattentionanycard-runpod:sha-14118cbec5aba88654232b1a2f232be4ca35d1db`。
+- 不可变 digest：`sha256:079df18c23caee6769ee0b70570c5c12863d7e5d0f847e7fb7cec1fb4d1136c3`。
+- 发布证据：该次 Actions 的 `runpod-publication-14118cbec5aba88654232b1a2f232be4ca35d1db` artifact。
+
+RunPod **Container Image** 固定为：
+
+```text
+ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:079df18c23caee6769ee0b70570c5c12863d7e5d0f847e7fb7cec1fb4d1136c3
+```
+
+相对下述旧镜像，本版加入 GEMM 2048³ / RMSNorm 4096×4096 FP16 的双 seed pilot、
+cold 12 studies / 216 attempts、目标 cold + warm 16 studies / 288 attempts，
+以及完整运行计时、参数/路径验证、恢复与归档检查；固定直接依赖版本不变。
+镜像内配置位于 `/opt/bo-kernel-tuner/runpod/configs/pilot.json`。
+
+仅验证计划时，显式覆盖默认 CMD，不传 `--gpus`，不挂载真实结果目录：
+
+```bash
+IMAGE='ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:079df18c23caee6769ee0b70570c5c12863d7e5d0f847e7fb7cec1fb4d1136c3'
+docker run --rm --network none --entrypoint /bin/bash "$IMAGE" \
+  runpod/run.sh pilot --dry-run --output /tmp/3090-pilot
+docker run --rm --network none --entrypoint /bin/bash "$IMAGE" \
+  runpod/run.sh runpod/configs/pilot.json --dry-run \
+  --source-run /tmp/imported/3090-pilot --source-seed 0 --top-k 3 \
+  --output /tmp/5090-pilot-transfer
+```
+
+预期 cold 输出 `studies=12`、`max_attempts=216`；cold + warm 输出 `16`、`288`。
+两者每种方法的总预算均为 72。dry-run 不要求源结果已存在，不验证真实迁移数据或 GPU。
+后续经操作者启动真实 pilot 时设置 `BO_SUITE=pilot`；迁移同时设置
+`BO_SOURCE_DIR` 与 **`BO_TOP_K=3`**（默认 5 不属于本 pilot 协议），source seed 默认 0。
+保留 `/workspace` 挂载和唯一 `BO_OUTPUT_DIR`，具体步骤见 [PILOT.md](PILOT.md)。
+默认 CMD 会启动实验，因此不要用省略 `--entrypoint` 的 `docker run` 替代上述 dry-run。
+
+### 历史镜像（2026-10-28；不含 pilot）
+
+保留该镜像用于旧版复现；**新 pilot 请使用上面的 2026-10-30 digest**。
+不要将旧镜像的 `BO_SUITE` 改成 pilot。
 
 [手动发布与核验记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/40636599094)
 已成功完成镜像构建、`pip check`、smoke dry-run、**75 项离线测试（19 项 GPU 测试未选中）**、
@@ -189,20 +236,20 @@ GHCR 推送、远端 SHA 标签到 digest 的匹配检查，以及按 digest 拉
 - 不可变 digest：`sha256:7898bfaf4b1a736ad6216d4f4306bd401598eb7c9e118a72359414b0d03e981d`。
 - 发布证据：该次运行保存的 `runpod-publication-93e5e2a410ad10b50cecb4d40d5a3ed91318fe96` artifact。
 
-可直接复制到 RunPod 自定义模板的 **Container Image**：
+旧版不可变引用（仅用于旧版复现）：
 
 ```text
 ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:7898bfaf4b1a736ad6216d4f4306bd401598eb7c9e118a72359414b0d03e981d
 ```
 
-可在有 Docker 的机器上提前拉取（此命令不启动容器或 GPU）：
+如需复现旧版本，可在有 Docker 的机器上拉取（不启动容器或 GPU）：
 
 ```bash
 docker pull ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:7898bfaf4b1a736ad6216d4f4306bd401598eb7c9e118a72359414b0d03e981d
 ```
 
 模板其余配置沿用本节的 `/workspace` 挂载、默认 CMD 和 `BO_SUITE=smoke`。
-本次核对 [GHCR package](https://github.com/jasonjiang8866/flashattentionanycard/pkgs/container/flashattentionanycard-runpod) 为 **Public**，可匿名拉取；
+2026-10-28 核对 [GHCR package](https://github.com/jasonjiang8866/flashattentionanycard/pkgs/container/flashattentionanycard-runpod) 为 **Public**，可匿名拉取；
 若未来改为私有，则需配置具有此 package 读取权限的 registry 凭据。
 无 GHCR 访问权限或后续发布失败时，继续使用第 1 节的 bootstrap 路径；它不依赖预发布镜像。
 bootstrap 已通过离线脚本/编排测试，真实 CUDA smoke 仍需在目标 GPU 上执行。

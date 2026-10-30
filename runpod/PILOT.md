@@ -41,10 +41,30 @@ RMSNorm 不足以代表大空间中的 BO 收敛，仅作小空间对照。
 
 ## 先 dry-run，再由操作者启动
 
-在两台独立 Linux 主机上使用相同的、含本 PR 的源码 commit 和依赖环境。
-现有 2026-10-28 GHCR digest **不包含 pilot 及新增校验/计时**，不能直接把旧镜像的
-`BO_SUITE` 改为 pilot。可使用此 commit 的 checkout 和现有 bootstrap 安装流程，
-或另行审核并构建/发布新镜像；此 PR 不发布镜像。GPU preflight 继续要求
+在两台独立 Linux 主机上使用相同的镜像 digest（2026-10-30 已发布）：
+
+```text
+ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:079df18c23caee6769ee0b70570c5c12863d7e5d0f847e7fb7cec1fb4d1136c3
+```
+
+镜像源码和 revision label 均为 `14118cbec5aba88654232b1a2f232be4ca35d1db`；
+[发布证据](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41028932034) 与完整离线验证说明见 [README.md](README.md#当前-pilot-镜像2026-10-30)。
+旧 2026-10-28 digest 不含 pilot，继续保留用于旧版复现。
+镜像内工作目录为 `/opt/bo-kernel-tuner`，配置为 `runpod/configs/pilot.json`。
+Docker 无 GPU dry-run 命令见 README；必须覆盖默认 CMD，避免自动启动真实实验。
+
+如无法访问 GHCR，或后续镜像发布失败，保留源码 bootstrap 路径：
+
+```bash
+git clone https://github.com/jasonjiang8866/flashattentionanycard.git
+cd flashattentionanycard
+git checkout --detach 14118cbec5aba88654232b1a2f232be4ca35d1db
+python -m runpod.launch pilot --dry-run --output /workspace/results/3090-pilot
+# 以下安装及真实 smoke 仅供后续由操作者在 GPU 主机上执行，本次未执行：
+# bash runpod/bootstrap.sh smoke --output /workspace/results/smoke-01
+```
+
+GPU preflight 继续要求
 torch 2.9.0+cu128、CUDA runtime 12.8、Triton 3.5.0，实际兼容性仍待两卡 smoke 验证。
 
 以下命令从仓库根目录运行。dry-run 不导入 torch/triton，不创建实验目录，也不检查真实 CUDA。
@@ -62,6 +82,9 @@ python -m runpod.launch pilot --dry-run \
 输出包括 studies、max_attempts、各方法总预算、每个 study 的候选上限/搜索空间大小、
 绝对输出目录、归档及计时文件路径。拒绝无效参数、超过目标预算的 top-k、占用的输出路径、
 文件型父路径以及 source/output 的相等或嵌套关系。dry-run 不证明目录最终可写、磁盘足够或 GPU 可用。
+
+通过镜像环境变量启动时，cold 设 `BO_SUITE=pilot`；迁移另设 `BO_SOURCE_DIR` 和
+`BO_TOP_K=3`（source seed 默认 0），使用新的 `BO_OUTPUT_DIR`。默认 top-k=5 不用于此协议。
 
 以下是**后续真实运行命令，本次未执行**。先单独通过两卡的 smoke，再运行 pilot；
 pilot 自身也保留完整 19 项 GPU 测试门禁，不会跳过精度验证。
