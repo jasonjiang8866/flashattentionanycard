@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "seeds": [
+    0,
+    1
+  ],
+  "measurement": {
+    "warmup": 10,
+    "repeats": 15,
+    "batch": 16,
+    "validation_seeds": 2
+  },
+  "trial_timeout": 60,
+  "cases": [
+    {
+      "id": "gemm_fp16",
+      "workload": {
+        "kernel": "gemm",
+        "dtype": "fp16",
+        "m": 2048,
+        "n": 2048,
+        "k": 2048
+      },
+      "profile": "full",
+      "trials": 24,
+      "startup_trials": 6
+    },
+    {
+      "id": "rmsnorm_fp16",
+      "workload": {
+        "kernel": "rmsnorm",
+        "dtype": "fp16",
+        "m": 4096,
+        "n": 4096
+      },
+      "profile": "full",
+      "trials": 12,
+      "startup_trials": 3
+    }
+  ]
+}

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import threading
+import time
 import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import asdict
@@ -44,7 +45,7 @@ def sha256(path):
 def load_config(value):
     path = (
         ROOT / "runpod/configs" / f"{value}.json"
-        if value in ("smoke", "performance")
+        if value in ("smoke", "pilot", "performance")
         else Path(value)
     )
     config = json.loads(path.read_text())
@@ -66,10 +67,16 @@ def load_config(value):
         or any(type(s) is not int or s < 0 for s in seeds)
     ):
         raise ValueError("Seeds must be distinct nonnegative integers")
-    Measurement(**config["measurement"])
+    measurement = Measurement(**config["measurement"])
+    if any(type(v) is not int for v in asdict(measurement).values()):
+        raise ValueError("Measurement counts must be integers")
     for key in ("trial_timeout", "time_budget"):
         number = config.get(key)
-        if number is not None and (not math.isfinite(number) or number <= 0):
+        if key == "trial_timeout" and number is None:
+            raise ValueError("trial_timeout is required")
+        if number is not None and (
+            type(number) not in (int, float) or not math.isfinite(number) or number <= 0
+        ):
             raise ValueError(f"Invalid {key}")
     ids = set()
     for case in config["cases"]:
@@ -79,9 +86,13 @@ def load_config(value):
             raise ValueError("Case ids must be unique, safe directory names")
         ids.add(case["id"])
         w = Workload(**case["workload"])
-        search_space(w.kernel, case["profile"])
+        if any(type(v) is not int for v in (w.m, w.n, w.k, w.data_seed, *w.expert_tokens)):
+            raise ValueError("Workload dimensions, data seed and token counts must be integers")
+        space = search_space(w.kernel, case["profile"])
         if any(type(case[k]) is not int or case[k] < 1 for k in ("trials", "startup_trials")):
             raise ValueError("Trial budgets and startup counts must be positive integers")
+        if case["startup_trials"] > min(case["trials"], grid_size(space)):
+            raise ValueError("Startup trials exceed the effective candidate budget")
     return config
 
 
@@ -101,6 +112,62 @@ def make_plan(config, with_transfer=False):
                     }
                 )
     return plan
+
+
+def describe_plan(config, output, source_run=None, top_k=5):
+    """CPU-only plan; candidate attempts include failures, pruning and duplicates."""
+    plan = make_plan(config, source_run is not None)
+    totals = {}
+    for item in plan:
+        case = item["case"]
+        cardinality = grid_size(search_space(case["workload"]["kernel"], case["profile"]))
+        budget = min(case["trials"], cardinality)
+        if source_run is not None and top_k > budget:
+            raise ValueError("--top-k exceeds a target case budget")
+        item.update(
+            max_attempts=budget,
+            search_space_size=cardinality,
+            output=str(output / item["path"]),
+        )
+        totals[item["label"]] = totals.get(item["label"], 0) + budget
+    cap = sum(totals.values())
+    return {
+        "studies": len(plan),
+        "max_attempts": cap,
+        "max_attempts_by_method": totals,
+        "output": str(output),
+        "archive": str(output.parent / f"{output.name}.tar.gz"),
+        "timing": str(output.parent / f"{output.name}.timing.json"),
+        "candidate_worker_timeout_sum_s": cap * config["trial_timeout"],
+        "time_limit_note": "Worker timeout sum only; excludes preflight, GPU tests, search/IO, "
+        "analysis and archiving. Not a suite wall-time or billing cap.",
+        "source_validation": "deferred until execution" if source_run is not None else None,
+        "plan": plan,
+    }
+
+
+def validate_output(output, source_run, resume):
+    """Check paths without creating directories or probing CUDA."""
+    if source_run is not None:
+        source = source_run.resolve()
+        if output == source or output in source.parents or source in output.parents:
+            raise ValueError("Output and source-run directories must not overlap")
+    if output.exists():
+        if not output.is_dir():
+            raise ValueError("Output must be a directory")
+        if any(output.iterdir()) and not resume:
+            raise ValueError("Output exists; use a new --output or explicitly --resume")
+    elif resume:
+        raise ValueError("Cannot resume a missing output directory")
+    for ancestor in output.parents:
+        if ancestor.exists():
+            if not ancestor.is_dir():
+                raise ValueError("Output parent must be a directory")
+            break
+    for suffix in (".tar.gz", ".tar.tmp", ".timing.json", ".timing.tmp"):
+        sidecar = output.parent / f"{output.name}{suffix}"
+        if sidecar.exists() and (sidecar.is_dir() or not resume):
+            raise ValueError(f"Output sidecar exists: {sidecar}")
 
 
 def gpu_preflight(device):
@@ -357,6 +424,8 @@ def bundle(output):
 
 
 def execute(args, config, output):
+    started_at = datetime.now(timezone.utc).isoformat()
+    started = time.perf_counter()
     from bo_kernel_tuner.analysis.plot_metrics import generate
     from bo_kernel_tuner.tuner.engine import run_search
 
@@ -378,6 +447,8 @@ def execute(args, config, output):
                 raise ValueError(
                     "Resume configuration/code/environment/hardware mismatch; use a new output"
                 )
+        timing_path = output.parent / f"{output.name}.timing.json"
+        sessions = json.loads(timing_path.read_text())["sessions"] if timing_path.exists() else []
         state = {
             "status": "running",
             "phase": "preflight",
@@ -475,6 +546,28 @@ def execute(args, config, output):
                 state.update(status="failed", gpu_validation_passed=False, archive_error=str(exc))
                 write_json(output / "status.json", state)
                 raise
+            finally:
+                # A sidecar avoids changing archive members after their checksums were sealed.
+                # Include preflight, validation, search, reports, checksums and bundle creation.
+                sessions.append(
+                    {
+                        "started_at": started_at,
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                        "elapsed_s": time.perf_counter() - started,
+                        "status": state["status"],
+                        "resume": args.resume,
+                    }
+                )
+                write_json(
+                    timing_path,
+                    {
+                        "schema_version": 1,
+                        "sessions": sessions,
+                        "total_active_wall_s": sum(s["elapsed_s"] for s in sessions),
+                        "scope": "Includes bundle creation; excludes idle time between resumes "
+                        "and this final timing-file write. SIGKILL/power loss may omit a session.",
+                    },
+                )
 
 
 def main(argv=None):
@@ -483,7 +576,7 @@ def main(argv=None):
         "suite",
         nargs="?",
         default=os.environ.get("BO_SUITE", "smoke"),
-        help="smoke, performance, or custom suite JSON path",
+        help="smoke, pilot, performance, or custom suite JSON path",
     )
     parser.add_argument("--device", type=int, default=int(os.environ.get("BO_DEVICE", "0")))
     parser.add_argument("--output", type=Path, default=os.environ.get("BO_OUTPUT_DIR"))
@@ -497,22 +590,16 @@ def main(argv=None):
         if args.device < 0 or args.top_k < 1 or args.source_seed < 0:
             raise ValueError("Invalid device, top-k, or source seed")
         config = load_config(args.suite)
-        if args.dry_run:
-            plan = make_plan(config, args.source_run is not None)
-            cap = sum(
-                min(
-                    p["case"]["trials"],
-                    grid_size(search_space(p["case"]["workload"]["kernel"], p["case"]["profile"])),
-                )
-                for p in plan
-            )
-            print(json.dumps({"studies": len(plan), "max_attempts": cap, "plan": plan}, indent=2))
-            return 0
         name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
         output = (
             args.output
             or Path(os.environ.get("BO_WORKSPACE", "/workspace/bo-kernel-tuner")) / "results" / name
         ).resolve()
+        validate_output(output, args.source_run, args.resume)
+        plan = describe_plan(config, output, args.source_run, args.top_k)
+        if args.dry_run:
+            print(json.dumps(plan, indent=2))
+            return 0
         execute(args, config, output)
         return 0
     except KeyboardInterrupt:

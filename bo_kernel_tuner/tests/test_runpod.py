@@ -107,6 +107,11 @@ def test_full_suite_artifacts_and_verified_resume(suite):
     status = json.loads((output / "status.json").read_text())
     assert status["gpu_validation_passed"] and status["completed_studies"] == 3
     assert status["gpu_test_count"] == 19
+    timing_path = output.parent / f"{output.name}.timing.json"
+    timing = json.loads(timing_path.read_text())
+    assert len(timing["sessions"]) == 1
+    assert timing["total_active_wall_s"] > 0
+    assert timing["sessions"][0]["status"] == "complete"
     with tarfile.open(output.with_suffix(".tar.gz")) as tar:
         assert "run/checksums.json" in tar.getnames()
     for path, digest in json.loads((output / "checksums.json").read_text()).items():
@@ -115,6 +120,11 @@ def test_full_suite_artifacts_and_verified_resume(suite):
     args.resume = True
     launch.execute(args, config, output)
     assert len(calls) == 3
+    resumed = json.loads(timing_path.read_text())
+    assert len(resumed["sessions"]) == 2
+    assert resumed["sessions"][0] == timing["sessions"][0]
+    assert resumed["sessions"][1]["resume"]
+    assert resumed["total_active_wall_s"] == sum(s["elapsed_s"] for s in resumed["sessions"])
 
 
 def test_missing_artifact_blocks_successful_resume(suite):
@@ -131,12 +141,15 @@ def test_resume_mismatch_does_not_modify_existing_run(suite):
     args, config, output, _, _ = suite
     launch.execute(args, config, output)
     before = (output / "status.json").read_bytes()
+    timing_path = output.parent / f"{output.name}.timing.json"
+    timing_before = timing_path.read_bytes()
     args.resume = True
     changed = copy.deepcopy(config)
     changed["measurement"]["batch"] += 1
     with pytest.raises(ValueError, match="mismatch"):
         launch.execute(args, changed, output)
     assert (output / "status.json").read_bytes() == before
+    assert timing_path.read_bytes() == timing_before
 
 
 def test_interrupted_study_is_archived_and_restarted(suite, monkeypatch):
@@ -177,6 +190,44 @@ def test_gpu_failure_preserves_diagnostics_without_success(suite, monkeypatch):
     status = json.loads((output / "status.json").read_text())
     assert status["status"] == "failed" and not status["gpu_validation_passed"]
     assert not calls and output.with_suffix(".tar.gz").exists()
+    timing = json.loads((output.parent / f"{output.name}.timing.json").read_text())
+    assert timing["sessions"][0]["status"] == "failed"
+    assert timing["total_active_wall_s"] > 0
+
+
+def test_suite_timing_includes_archive_creation(suite, monkeypatch):
+    args, config, output, _, _ = suite
+    clock = [100.0]
+
+    def tick():
+        clock[0] += 0.001
+        return clock[0]
+
+    monkeypatch.setattr(launch.time, "perf_counter", tick)
+    real_bundle = launch.bundle
+
+    def bundle_with_elapsed(directory):
+        clock[0] += 42.0
+        return real_bundle(directory)
+
+    monkeypatch.setattr(launch, "bundle", bundle_with_elapsed)
+    launch.execute(args, config, output)
+    timing = json.loads((output.parent / f"{output.name}.timing.json").read_text())
+    assert 42.0 <= timing["total_active_wall_s"] < 43.0
+
+
+def test_archive_failure_records_failed_elapsed(suite, monkeypatch):
+    args, config, output, _, _ = suite
+
+    def fail(_):
+        raise OSError("simulated archive failure")
+
+    monkeypatch.setattr(launch, "bundle", fail)
+    with pytest.raises(OSError, match="archive failure"):
+        launch.execute(args, config, output)
+    timing = json.loads((output.parent / f"{output.name}.timing.json").read_text())
+    assert timing["sessions"][0]["status"] == "failed"
+    assert timing["total_active_wall_s"] > 0
 
 
 def test_worker_measurement_evidence_is_required(suite):
