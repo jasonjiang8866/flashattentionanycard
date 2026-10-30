@@ -42,8 +42,13 @@ bash runpod/run.sh performance --device 0 \
 | 配置 | 算子与 dtype | seeds | studies | 最大候选评估次数 |
 |---|---|---:|---:|---:|
 | `smoke` | 3 算子 × FP16/BF16 | 1 | 18 | 36 |
+| `pilot` | GEMM + RMSNorm，FP16 | 2 | 12 | 216 |
+| `pilot` 加迁移 | 上述配置 + warm TPE | 2 | 16 | 288 |
 | `performance` | 3 算子 × FP16/BF16 | 5 | 90 | 3,360 |
 | `performance` 加迁移 | 上述配置 + warm TPE | 5 | 120 | 4,480 |
+
+预算受控的 RTX 3090/5090 探索方案、dry-run、独立主机运行与迁移步骤见 [PILOT.md](PILOT.md)。
+现有已发布镜像不包含新增 pilot；需使用包含本配置的源码或后续新镜像。默认入口仍为 smoke。
 
 smoke 验证执行链路，不能证明 TPE 的收敛优势。performance 包含每个 GEMM/MoE study 50 attempts、RMSNorm 12 attempts；
 每次都独立启动进程并冷编译，完整实验可能耗时数小时，具体以 GPU、编译和测量时间为准。
@@ -103,6 +108,7 @@ SIGTERM/Ctrl-C 会尽可能保存状态与压缩包；突然断电或 SIGKILL �
 | `figures/<case>/` | 收敛曲线、耗时图、参数热力图、统计表 |
 | `checksums.json` | 输出文件 SHA-256 索引 |
 | 同级 `<run-name>.tar.gz` | 完整结果包；失败时也尽可能生成 |
+| 同级 `<run-name>.timing.json` | 整套运行耗时（含归档）；累计失败/恢复会话，复制结果时一起保留 |
 
 只有 GPU 测试无跳过、每个计划 study 通过完整性检查、图表和统计表齐全时，
 `status=complete` 且 `gpu_validation_passed=true`。恢复过程中该标记保持 false。
@@ -138,7 +144,7 @@ Pod 启动后自动跑一次实验，随后保持容器运行以便取回文件�
 
 | 环境变量 | 默认值/用途 |
 |---|---|
-| `BO_SUITE` | `smoke`；也可为 `performance` 或 JSON 路径 |
+| `BO_SUITE` | `smoke`；也可为 `pilot`、`performance` 或 JSON 路径 |
 | `BO_DEVICE` | `0`，当前可见设备中的逻辑编号 |
 | `BO_WORKSPACE` | `/workspace/bo-kernel-tuner` |
 | `BO_OUTPUT_DIR` | 手动运行自动生成唯一目录；镜像启动固定为 `results/current` |
