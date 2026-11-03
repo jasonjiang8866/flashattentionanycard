@@ -7,6 +7,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -76,6 +77,62 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(len(evidence["catalog"]), 4)
         self.assertTrue(all(x["status"] == "no_capacity" for x in evidence["catalog"]))
         self.assertTrue(all(len(call.args) == 1 for call in api.call.call_args_list))
+
+    def test_cuda_floor_matches_catalog_evidence_and_create_for_each_gpu(self):
+        expected = {
+            c.MIG: "12.8",
+            "NVIDIA GeForce RTX 3090": "12.4",
+            "NVIDIA GeForce RTX 4090": "12.4",
+            "NVIDIA GeForce RTX 5090": "12.8",
+        }
+        self.assertEqual(set(c.GPUS), set(expected))
+        for selected, minimum in expected.items():
+            with self.subTest(gpu=selected):
+                api = Mock()
+                api.listing.return_value = []
+
+                def catalog(path):
+                    parsed = urllib.parse.urlsplit(path)
+                    name = urllib.parse.unquote(parsed.path.rsplit("/", 1)[1])
+                    query = urllib.parse.parse_qs(parsed.query)
+                    self.assertEqual(query["minCudaVersion"], [expected[name]])
+                    self.assertEqual(query["cloud"], ["SECURE"])
+                    return {
+                        "price": {"secure": 0.5},
+                        "dataCenters": [{"id": "US-TEST-1", "availability": "LOW"}]
+                        if name == selected
+                        else [],
+                    }
+
+                api.call.side_effect = catalog
+                with (
+                    patch.object(c, "provenance", return_value={}),
+                    patch.object(c, "budget", return_value={}),
+                ):
+                    evidence = c.preflight(api)
+                self.assertEqual(evidence["gpu"], selected)
+                self.assertEqual(evidence["min_cuda_version"], minimum)
+                self.assertEqual(api.call.call_count, 4)
+                self.assertEqual(
+                    {x["gpu"]: x["min_cuda_version"] for x in evidence["catalog"]}, expected
+                )
+                evidence.update(config_sha256="b" * 64, controller_sha="a" * 40)
+                api.reset_mock()
+                api.call.side_effect = RuntimeError("create outcome unknown")
+                with (
+                    patch.object(c, "authorization_guard"),
+                    patch.object(c, "preflight", return_value=evidence),
+                    patch.object(c, "cleanup") as cleanup,
+                    patch("builtins.print"),
+                    self.assertRaises(RuntimeError),
+                ):
+                    c.launch(api)
+                api.call.assert_called_once()
+                self.assertEqual(api.call.call_args.args[:2], ("/pods", "POST"))
+                payload = api.call.call_args.args[2]
+                self.assertEqual(payload["gpu"]["id"], selected)
+                self.assertEqual(payload["gpu"]["minCudaVersion"], minimum)
+                cleanup.assert_called_once_with(api)
 
     def test_failed_preflight_does_not_expose_provider_error_text(self):
         api = Mock()
@@ -304,6 +361,32 @@ class ControllerTests(unittest.TestCase):
                 else:
                     with self.assertRaises(RuntimeError):
                         c.authorization_guard()
+
+    def test_zero_create_marker_reconciliation_does_not_admit_unknown_attempt(self):
+        current = {"name": c.MARKER, "workflow_run": {"id": 1234}, "id": 888}
+        first = {"name": c.MARKER, "workflow_run": {"id": 41577245210}, "id": 13204770313}
+        for run, marker, allowed in (
+            (41668287039, 13245909643, True),
+            (41668287039, 999, False),
+            (41668287039, None, False),
+            (999, 13245909643, False),
+        ):
+            with self.subTest(run=run, marker=marker):
+                previous = {"name": c.MARKER, "workflow_run": {"id": run}, "id": marker}
+                response = [
+                    {"object": {"sha": "a" * 40}},
+                    {"artifacts": [first, previous, current]},
+                ]
+                with (
+                    patch.object(c, "git", return_value="a" * 40),
+                    patch.object(c, "request", side_effect=response),
+                    patch.object(c.time, "time", return_value=1793664000),
+                ):
+                    if allowed:
+                        c.authorization_guard()
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            c.authorization_guard()
 
     def test_pagination_must_be_complete(self):
         with patch.dict(os.environ, {"RUNPOD_API_KEY": "test"}):

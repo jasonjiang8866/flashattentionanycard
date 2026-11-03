@@ -13,7 +13,8 @@ It does not publish an image. Existing [pilot/bootstrap instructions](PILOT.md) 
   temporary disk. Expires 2026-11-10 UTC. No automatic retry or second GPU. All four GPU
   types were authorized: RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb, RTX 3090,
   RTX 4090, RTX 5090. Select the cheapest verified available Secure Cloud GPU, one card,
-  maximum $1.50/hour, CUDA >=12.8. No capacity or unverifiable price means no creation.
+  maximum $1.50/hour. Host CUDA floors are >=12.4 for RTX 3090/4090 and >=12.8
+  for RTX 5090/PRO 6000 Blackwell MIG. No capacity or unverifiable price means no creation.
 - Workload: existing `smoke` suite, 18 studies / at most 36 candidate attempts;
   GEMM, RMSNorm, grouped MoE GEMM, FP16/BF16; Grid/Random/TPE; sampler seed 0,
   two validation seeds, synthetic inputs identified by the config hash in artifacts.
@@ -26,7 +27,8 @@ It does not publish an image. Existing [pilot/bootstrap instructions](PILOT.md) 
 - Runtime: at most 20 minutes including provisioning, image pull, CUDA tests, search,
   analysis and archive retrieval; stop work 90 seconds early for result transfer.
   Reserve another 6 minutes for cleanup. At the maximum GPU rate the compute+disk
-  estimate is below $0.66, leaving more than $0.34 of the $1 authorization unused.
+  estimate plus the $0.06 prior-spend reserve is below $0.72, leaving more than
+  $0.28 of the same $1 authorization unused.
 - Storage: 40 GB ephemeral container disk, no network/global/persistent volume created.
   Current [official pricing](https://docs.runpod.io/pods/pricing) is $0.10/GB/month,
   charged per second; controller conservatively uses a 28-day month (~$0.00596/hour).
@@ -38,6 +40,33 @@ The budget is enforced by conservative rate/runtime admission and cleanup, **not
 provider-enforced dollar cap**. Provider outages or failed deletion can exceed the estimate;
 inspect any cleanup failure immediately. Account billing can lag. This workflow does not
 change account autopay or inspect unrelated credentials.
+
+### Host CUDA admission and runtime compatibility
+
+| GPU | Minimum host-reported CUDA version |
+| --- | --- |
+| RTX 3090 (Ampere) | 12.4 |
+| RTX 4090 (Ada) | 12.4 |
+| RTX 5090 (Blackwell) | 12.8 |
+| RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb | 12.8 |
+
+Catalog queries and Pod creation use the same per-GPU minimum; each catalog record
+and selected offer in `preflight.json` retain it. The minimum is a host-selection
+filter, not a change to the pinned image's torch 2.9.0+cu128 / Triton 3.5.0 runtime.
+Newer host versions remain eligible. Secure Cloud, approved GPU types and budget
+limits are unchanged.
+
+CUDA 12.4 is a conservative experimental floor for Ampere/Ada, not a claim that
+every cu128 workload works on every such host. NVIDIA documents CUDA 12.x minor
+version compatibility with a sufficiently new driver, but newer driver features
+and driver-side PTX JIT can still fail. The existing CUDA probe, all GPU correctness
+tests and study validation must pass on the actual host; failures reject the run
+and trigger cleanup. Blackwell retains the 12.8 floor. No driver replacement,
+compatibility-library injection or test bypass is used.
+
+References: [NVIDIA minor-version compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/610/minor-version-compatibility.html),
+[CUDA 12.8 release notes](https://docs.nvidia.com/cuda/archive/12.8.0/cuda-toolkit-release-notes/),
+[NVIDIA architecture support matrix](https://docs.nvidia.com/datacenter/tesla/drivers/cuda-toolkit-driver-and-architecture-matrix.html).
 
 ## Execution and evidence
 
@@ -111,3 +140,19 @@ Small archives (<=128 KiB) are also carried in the authenticated JSON result and
 pass the same exact size/hash checks. Suite phase/error evidence is retained in the
 summary even when a separate download fails. The cause of the original HTTP 403
 and suite failure remains unconfirmed until live diagnostic evidence is recovered.
+
+### Reconciled zero-create attempt
+
+[Run 41668287039](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41668287039)
+uploaded its authorization marker, then failed the second read-only preflight with
+`no_capacity` for all four GPUs under the original 12.8 floor. It failed before
+`provision.json` and before `POST /pods`; no paid resource was requested. Its result
+artifact contains only `preflight.json` and `cleanup.json`, with SHA256
+`bec60024869e410a80625c8ffa3a9e51d7afa235a1c8ee1b6bcfe68d94ce9359`.
+[Independent recovery 41668355419](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41668355419)
+also verified the exact run's Pod absent. Additional RunPod cost: $0.
+
+Preserve marker artifact `13245909643` and reconcile only that exact run/artifact
+pair alongside the first attempt. The prior-spend reserve remains $0.06, the total
+authorization remains $1, and any other unreconciled attempt still blocks launch.
+The changed CUDA floor has not yet been validated on a real GPU.
