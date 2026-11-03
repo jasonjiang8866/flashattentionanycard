@@ -31,7 +31,15 @@ from runpod.provider import (
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "runpod-results"
-GPUS = (MIG, "NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 4090", "NVIDIA GeForce RTX 5090")
+# Host admission floors, not the container's CUDA runtime version. Ampere/Ada
+# can try CUDA 12.x minor compatibility; the unchanged real GPU gates decide.
+MIN_CUDA_BY_GPU = {
+    MIG: "12.8",
+    "NVIDIA GeForce RTX 3090": "12.4",
+    "NVIDIA GeForce RTX 4090": "12.4",
+    "NVIDIA GeForce RTX 5090": "12.8",
+}
+GPUS = tuple(MIN_CUDA_BY_GPU)
 OWNER = "FAAC_MANAGED_BY"
 AUTHORIZATION = "faac-20261103-usd1"
 # This authorization cannot be reused after artifact retention expires.
@@ -46,7 +54,10 @@ MARKER = "runpod-authorization-" + AUTHORIZATION
 # Reconciled under the user's same total-$1 authorization, including retries.
 # Run 41577245210: cleanup verified twice; conservative estimate $0.0483414.
 # Evidence artifact 13204731341, SHA256 89ea9b5470bd66485a28fb12b1c9bc4db40c3efbf40b5a0a48de277218ceac5d.
-RECONCILED_MARKERS = {"41577245210": 13204770313}
+# Run 41668287039 failed in preflight before provision intent or POST /pods.
+# Original and recovery 41668355419 both verified absence; additional cost $0.
+# Result artifact 13246853367, SHA256 bec60024869e410a80625c8ffa3a9e51d7afa235a1c8ee1b6bcfe68d94ce9359.
+RECONCILED_MARKERS = {"41577245210": 13204770313, "41668287039": 13245909643}
 PRIOR_SPEND_RESERVE = 0.06
 
 
@@ -137,12 +148,22 @@ def preflight(api):
         raise RuntimeError("An owned Pod already exists; cleanup and inspect before launch")
     choices, catalog = [], []
     for name in GPUS:
-        entry = {"gpu": name, "rate": None, "regions": []}
+        minimum_cuda = MIN_CUDA_BY_GPU[name]
+        entry = {"gpu": name, "min_cuda_version": minimum_cuda, "rate": None, "regions": []}
         try:
             data = api.call(
                 "/catalog/gpus/"
                 + urllib.parse.quote(name, safe="")
-                + "?include=AVAILABILITY&product=POD&cloud=SECURE&count=1&minCudaVersion=12.8"
+                + "?"
+                + urllib.parse.urlencode(
+                    {
+                        "include": "AVAILABILITY",
+                        "product": "POD",
+                        "cloud": "SECURE",
+                        "count": 1,
+                        "minCudaVersion": minimum_cuda,
+                    }
+                )
             )
             rate = data.get("price", {}).get("secure")
             entry["rate"] = rate if finite(rate) else None
@@ -181,6 +202,7 @@ def preflight(api):
         read_only=True,
         catalog=catalog,
         gpu=name,
+        min_cuda_version=MIN_CUDA_BY_GPU[name],
         regions=regions,
         cost=cost,
         budget=budget(api, reserve=max(1, rate + DISK_HOURLY)),
@@ -408,7 +430,7 @@ def launch(api):
             "count": 1,
             "minRamPerGpu": 16,
             "minVcpuCountPerGpu": 4,
-            "minCudaVersion": "12.8",
+            "minCudaVersion": MIN_CUDA_BY_GPU[evidence["gpu"]],
         },
         "dataCenterIds": evidence["regions"],
         "startSsh": False,
