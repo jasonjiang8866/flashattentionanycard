@@ -3,6 +3,7 @@
 import argparse
 import base64
 import hashlib
+import io
 import json
 import math
 import os
@@ -42,6 +43,11 @@ MAX_WORK_SECONDS = 1200  # includes allocation, image pull, tests and result tra
 MAX_RATE = 1.50
 MAX_ARCHIVE = 64 * 1024 * 1024
 MARKER = "runpod-authorization-" + AUTHORIZATION
+# Reconciled under the user's same total-$1 authorization, including retries.
+# Run 41577245210: cleanup verified twice; conservative estimate $0.0483414.
+# Evidence artifact 13204731341, SHA256 89ea9b5470bd66485a28fb12b1c9bc4db40c3efbf40b5a0a48de277218ceac5d.
+RECONCILED_MARKERS = {"41577245210": 13204770313}
+PRIOR_SPEND_RESERVE = 0.06
 
 
 def save(name, value):
@@ -64,7 +70,9 @@ def quote(rate):
     if not finite(rate, 0.001) or rate > MAX_RATE:
         raise ValueError("GPU rate missing or above $1.50/hour")
     hourly = rate + DISK_HOURLY
-    work = min(MAX_WORK_SECONDS, math.floor(0.80 / hourly * 3600) - CLEANUP_SECONDS)
+    work = min(
+        MAX_WORK_SECONDS, math.floor((0.80 - PRIOR_SPEND_RESERVE) / hourly * 3600) - CLEANUP_SECONDS
+    )
     if work < 300:
         raise ValueError("Insufficient useful runtime within budget")
     return {
@@ -72,9 +80,12 @@ def quote(rate):
         "disk_hourly_usd": DISK_HOURLY,
         "work_seconds": work,
         "cleanup_seconds": CLEANUP_SECONDS,
-        "planned_total_usd": hourly * (work + CLEANUP_SECONDS) / 3600,
+        "planned_total_usd": PRIOR_SPEND_RESERVE + hourly * (work + CLEANUP_SECONDS) / 3600,
+        "prior_spend_reserve_usd": PRIOR_SPEND_RESERVE,
         "approved_usd": 1,
-        "unallocated_reserve_usd": 1 - hourly * (work + CLEANUP_SECONDS) / 3600,
+        "unallocated_reserve_usd": 1
+        - PRIOR_SPEND_RESERVE
+        - hourly * (work + CLEANUP_SECONDS) / 3600,
         "transfer_usd": 0,
         "storage_gb": DISK_GB,
         "pricing_source": "https://docs.runpod.io/pods/pricing",
@@ -196,9 +207,14 @@ def authorization_guard():
         for artifact in artifacts:
             if artifact.get("name") != MARKER:
                 continue
-            if str(artifact.get("workflow_run", {}).get("id")) != run:
-                raise RuntimeError("This $1 authorization was already consumed; do not retry")
-            marker_seen = True
+            artifact_run = str(artifact.get("workflow_run", {}).get("id"))
+            if artifact_run == run:
+                marker_seen = True
+            elif (
+                RECONCILED_MARKERS.get(artifact_run) != artifact.get("id")
+                or artifact.get("id") is None
+            ):
+                raise RuntimeError("An unreconciled attempt already consumed this authorization")
         if len(artifacts) < 100:
             break
     else:
@@ -261,7 +277,9 @@ def cleanup(api):
             # Require repeated independent inventories to cover delayed create visibility.
             if attempt >= 2 and state.get("pod_id"):
                 elapsed = time.time() - state["started_epoch"]
-                estimate = elapsed / 3600 * (state["cost"]["gpu_hourly_usd"] + DISK_HOURLY)
+                estimate = state["cost"].get("prior_spend_reserve_usd", 0) + elapsed / 3600 * (
+                    state["cost"]["gpu_hourly_usd"] + DISK_HOURLY
+                )
                 save(
                     "cleanup.json",
                     {
@@ -296,7 +314,7 @@ def cleanup(api):
     raise RuntimeError("Owned Pod removal not verified; inspect immediately")
 
 
-def download(url, token, expected):
+def download(url, token, expected, inline=None):
     size, digest = expected.get("size"), expected.get("sha256")
     if (
         type(size) is not int
@@ -304,13 +322,24 @@ def download(url, token, expected):
         or not re.fullmatch(r"[a-f0-9]{64}", digest or "")
     ):
         raise RuntimeError("Invalid result archive metadata")
-    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+    # Use the same explicit client headers as the successful /result requests.
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+            "User-Agent": "flashattentionanycard-actions/0.1",
+        },
+    )
+    if inline is not None:
+        if not isinstance(inline, str) or len(inline) > 180000 or size > 128 * 1024:
+            raise RuntimeError("Oversized inline diagnostic archive")
+        response = io.BytesIO(base64.b64decode(inline, validate=True))
+    else:
+        response = urllib.request.build_opener(NoRedirect).open(req, timeout=30)
     path = OUT / "smoke.tar.gz"
     hasher, count = hashlib.sha256(), 0
-    with (
-        urllib.request.build_opener(NoRedirect).open(req, timeout=30) as response,
-        path.open("wb") as f,
-    ):
+    with response, path.open("wb") as f:
         while block := response.read(1024 * 1024):
             count += len(block)
             if count > size:
@@ -422,7 +451,12 @@ def launch(api):
                 # Worker returns only explicit evidence fields, never its environment.
                 save("result.json", result)
                 if result.get("archive"):
-                    download(url + "/archive", token, result["archive"])
+                    download(
+                        url + "/archive",
+                        token,
+                        result["archive"],
+                        result.get("archive_inline_base64"),
+                    )
                 if result.get("status") != "accepted":
                     raise RuntimeError("GPU experiment did not pass all acceptance gates")
                 if (

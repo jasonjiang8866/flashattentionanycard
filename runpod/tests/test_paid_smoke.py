@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import io
 import json
 import os
@@ -194,6 +196,67 @@ class ControllerTests(unittest.TestCase):
             ([{"name": c.MARKER, "workflow_run": {"id": 1234}}], True),
         ):
             response = [{"object": {"sha": "a" * 40}}, {"artifacts": artifacts}]
+            with (
+                patch.object(c, "git", return_value="a" * 40),
+                patch.object(c, "request", side_effect=response),
+                patch.object(c.time, "time", return_value=1793664000),
+            ):
+                if allowed:
+                    c.authorization_guard()
+                else:
+                    with self.assertRaises(RuntimeError):
+                        c.authorization_guard()
+
+    def test_download_uses_same_headers_and_checks_bytes(self):
+        data = b"diagnostic archive"
+        expected = {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        opener = Mock()
+        opener.open.return_value = io.BytesIO(data)
+        with patch.object(c.urllib.request, "build_opener", return_value=opener):
+            c.download("https://test.invalid/archive", "test-token", expected)
+        req = opener.open.call_args.args[0]
+        self.assertEqual(req.get_header("User-agent"), "flashattentionanycard-actions/0.1")
+        self.assertEqual(req.get_header("Authorization"), "Bearer test-token")
+        self.assertEqual((self.out / "smoke.tar.gz").read_bytes(), data)
+
+    def test_inline_diagnostics_validated_without_network(self):
+        data = b"diagnostic archive"
+        expected = {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        with patch.object(c.urllib.request, "build_opener") as network:
+            c.download(
+                "https://test.invalid/archive",
+                "test-token",
+                expected,
+                base64.b64encode(data).decode(),
+            )
+            network.assert_not_called()
+            with self.assertRaises(RuntimeError):
+                c.download(
+                    "https://test.invalid/archive",
+                    "test-token",
+                    expected,
+                    base64.b64encode(b"corrupt").decode(),
+                )
+            with self.assertRaises(RuntimeError):
+                c.download("https://test.invalid/archive", "test-token", expected, "a" * 180001)
+
+    def test_reconciled_retry_preserves_total_cap(self):
+        self.assertEqual(c.PRIOR_SPEND_RESERVE, 0.06)
+        self.assertGreater(c.PRIOR_SPEND_RESERVE, 0.0483414)
+        for rate in (0.5, 0.69, 1.5):
+            q = c.quote(rate)
+            estimate = (
+                c.PRIOR_SPEND_RESERVE
+                + (rate + c.DISK_HOURLY) * (q["work_seconds"] + q["cleanup_seconds"]) / 3600
+            )
+            self.assertAlmostEqual(q["planned_total_usd"], estimate)
+            self.assertLessEqual(estimate, 0.8)
+
+    def test_only_exact_reconciled_marker_allows_retry(self):
+        for marker_id, allowed in ((13204770313, True), (999, False), (None, False)):
+            previous = {"name": c.MARKER, "workflow_run": {"id": 41577245210}, "id": marker_id}
+            current = {"name": c.MARKER, "workflow_run": {"id": 1234}, "id": 888}
+            response = [{"object": {"sha": "a" * 40}}, {"artifacts": [previous, current]}]
             with (
                 patch.object(c, "git", return_value="a" * 40),
                 patch.object(c, "request", side_effect=response),
