@@ -27,8 +27,8 @@ It does not publish an image. Existing [pilot/bootstrap instructions](PILOT.md) 
 - Runtime: at most 20 minutes including provisioning, image pull, CUDA tests, search,
   analysis and archive retrieval; stop work 90 seconds early for result transfer.
   Reserve another 6 minutes for cleanup. At the maximum GPU rate the compute+disk
-  estimate plus the $0.06 prior-spend reserve is below $0.72, leaving more than
-  $0.28 of the same $1 authorization unused.
+  estimate plus the $0.10 prior-spend reserve is below $0.76, leaving more than
+  $0.24 of the same $1 authorization unused.
 - Storage: 40 GB ephemeral container disk, no network/global/persistent volume created.
   Current [official pricing](https://docs.runpod.io/pods/pricing) is $0.10/GB/month,
   charged per second; controller conservatively uses a 28-day month (~$0.00596/hour).
@@ -92,10 +92,19 @@ Acceptance requires all of the following:
 4. `cleanup.json` confirms the exact owned temporary Pod absent from independent
    provider inventories. `acceptance.json` alone is not full experiment acceptance.
 
-Artifacts include `preflight.json`, `provision.json`, `allocation.json`, `result.json`,
+Artifacts include `preflight.json`, `provision.json`, `create-error.json`, `allocation.json`, `result.json`,
 `smoke.tar.gz`, `acceptance.json` and `cleanup.json` when the corresponding stages
 complete. Partial results remain partial; a CPU test pass is not CUDA execution.
 Costs in cleanup evidence are conservative estimates, not final account invoices.
+
+`create-error.json` records a failed create's HTTP status and fixed keyword categories;
+these are diagnostic clues, not a definitive provider root cause. Raw provider text,
+request payloads and credentials are never retained. Unknown create outcomes are never
+retried automatically. A saved intent without a Pod ID requires eight consecutive
+empty inventories before reporting current absence. Known-ID and fresh-runner cleanup
+require three consecutive empty inventories; seeing a Pod resets the count. An inventory
+error leaves the cleanup status unknown, including after an earlier successful check.
+Absence does not establish zero historical billing.
 
 ## Cleanup and cancellation
 
@@ -118,6 +127,41 @@ Run `python -m unittest discover -s runpod/tests -v`, repository CPU pytest, Ruf
 workflow YAML validation. These checks use mocks and local synthetic files; they
 make no paid requests. Live API/schema, availability, account budget and actual CUDA
 results remain unverified until the manual workflow runs.
+
+## 2026-11-04 SGT: create rejected, independent absence verified
+
+After PR #7 merged at `95d8c37523c8a581e3e336b37e2dabe716f198db`,
+[read-only run 41674743877](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41674743877)
+found RTX 4090 capacity in EU-RO-1 at $0.89/hour with the 12.4 host floor.
+Stock changed before the next run: the final preflight in
+[attempt 41675121064](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41675121064)
+selected the allowed PRO 6000 Blackwell MIG 1g.24gb in US-WA-1 at $0.69/hour,
+still with the 12.8 floor. Its sole create POST returned HTTP 400 with the old
+`unclassified` diagnostic. No Pod ID, allocation receipt, worker result or CUDA
+test result was obtained. The discarded provider body cannot be recovered;
+neither a capacity race nor a CUDA incompatibility is established as the cause.
+
+The original cleanup reported `unknown` because it required a Pod ID even after
+repeated empty inventories. Independent
+[recovery 41675661222](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41675661222)
+verified that `faac-20261103-usd1-41675121064` was absent at 00:35:03 SGT.
+This proves current absence, not a final zero-dollar invoice. Reserve the full
+179.271039 seconds from create intent to recovery at the quoted GPU+disk rate:
+$0.0346567. Together with the existing $0.06 reserve, round cumulative reserved
+spend up to $0.10. The total experiment authorization remains $1.
+
+Retain authorization artifact `13249184469` and reconcile only its exact run/artifact
+pair; all earlier markers remain retained. Evidence ZIPs:
+
+| Artifact | SHA256 |
+| --- | --- |
+| Read-only preflight `13250421281` | `2845651fa25664b305292027445b1f7d11c9867d0caeacc0acdb72397ce84d07` |
+| Attempt evidence `13251160114` | `83a5d04b1d5cf35e3cc2046b6945c1c2e73b36c9b6262e3847b40c83f1ae7b14` |
+| Independent cleanup `13251210121` | `8a2b42a6d7aa7599b58dcc256545c924d183e64acb5c1daf79903258d212bb2b` |
+
+The controller changes improve diagnostics and reconciliation; they do not claim
+to fix the unidentified provider rejection. Any later create still requires a
+fresh live preflight and the existing exact-SHA, budget and single-create guards.
 
 ## Reconciled first attempt and bounded retry
 

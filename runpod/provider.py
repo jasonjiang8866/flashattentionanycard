@@ -20,6 +20,15 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+class RemoteHTTPError(RuntimeError):
+    """Only a status and fixed categories may leave the HTTP boundary."""
+
+    def __init__(self, status, categories):
+        self.status = status
+        self.categories = sorted(set(categories)) or ["unclassified"]
+        super().__init__(f"Remote HTTP {status}; categories={','.join(self.categories)}")
+
+
 def request(url, *, token, method="GET", body=None, limit=8_000_000):
     req = urllib.request.Request(
         url,
@@ -60,12 +69,28 @@ def request(url, *, token, method="GET", body=None, limit=8_000_000):
                 ("maximum", "maximum"),
                 ("unavailable", "unavailable"),
                 ("not found", "not-found"),
+                ("sold out", "capacity"),
+                ("no longer any", "capacity"),
+                ("no available", "capacity"),
+                ("not enough", "insufficient-resources"),
+                ("insufficient", "insufficient-resources"),
+                ("resource", "resource"),
+                ("gpu", "gpu"),
+                ("mig", "mig"),
+                ("cuda", "cuda"),
+                ("memory", "memory"),
+                ("ram", "memory"),
+                ("datacenter", "data-center"),
+                ("data center", "data-center"),
+                ("invalid", "invalid-input"),
+                ("validation", "validation"),
+                ("additional properties", "unknown-field"),
+                ("credit", "credit"),
+                ("balance", "credit"),
             )
             if word in raw
         ]
-        raise RuntimeError(
-            f"Remote HTTP {exc.code}; categories={','.join(sorted(set(categories))) or 'unclassified'}"
-        ) from None
+        raise RemoteHTTPError(exc.code, categories) from None
     except (urllib.error.URLError, TimeoutError):
         raise RuntimeError("Remote request timeout/unavailable; outcome may be unknown") from None
 

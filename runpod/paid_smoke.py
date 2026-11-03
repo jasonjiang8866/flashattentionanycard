@@ -23,6 +23,7 @@ from runpod.provider import (
     REPOSITORY,
     SOURCE,
     NoRedirect,
+    RemoteHTTPError,
     Runpod,
     budget,
     finite,
@@ -57,8 +58,15 @@ MARKER = "runpod-authorization-" + AUTHORIZATION
 # Run 41668287039 failed in preflight before provision intent or POST /pods.
 # Original and recovery 41668355419 both verified absence; additional cost $0.
 # Result artifact 13246853367, SHA256 bec60024869e410a80625c8ffa3a9e51d7afa235a1c8ee1b6bcfe68d94ce9359.
-RECONCILED_MARKERS = {"41577245210": 13204770313, "41668287039": 13245909643}
-PRIOR_SPEND_RESERVE = 0.06
+# Run 41675121064: POST returned HTTP 400, no Pod ID; recovery 41675661222
+# verified absence. Reserve the entire 179.272 s intent-to-recovery interval
+# at quoted GPU+disk rate ($0.034657), rather than claiming zero billed cost.
+RECONCILED_MARKERS = {
+    "41577245210": 13204770313,
+    "41668287039": 13245909643,
+    "41675121064": 13249184469,
+}
+PRIOR_SPEND_RESERVE = 0.10
 
 
 def save(name, value):
@@ -275,34 +283,15 @@ def owned(pod, state):
 
 def cleanup(api):
     path = OUT / "provision.json"
-    if not path.exists():
-        # Fresh runner recovery also covers cancellation/loss of the original runner.
-        run = identity()
-        name = AUTHORIZATION + "-" + run
-        matches = [p for p in api.listing("/pods", "pods") if p.get("name") == name]
-        if not matches:
-            save(
-                "cleanup.json",
-                {
-                    "status": "verified_absent",
-                    "name": name,
-                    "checked_epoch": time.time(),
-                    "cost": "unverified_no_local_intent",
-                },
-            )
-            return
-        if len(matches) != 1:
-            raise RuntimeError("Ambiguous recovery inventory")
-        pod = matches[0]
-        state = {"name": name, "run_id": run, "pod_id": pod.get("id")}
-        if not owned(pod, state):
-            raise RuntimeError("Recovery ownership mismatch")
-        state.update(
-            started_epoch=float(pod["env"]["FAAC_STARTED"]),
-            cost=quote(float(pod["env"]["FAAC_RATE"])),
-        )
-        save("provision.json", state)
-    state = json.loads(path.read_text())
+    run = identity()
+    state = (
+        json.loads(path.read_text())
+        if path.exists()
+        else {"name": AUTHORIZATION + "-" + run, "run_id": run, "pod_id": None}
+    )
+    # Invalidate any earlier success before querying inventory again.
+    save("cleanup.json", {"status": "unknown", "name": state["name"]})
+    absent_checks = 0
     # Reconcile by exact name even if POST returned an unknown outcome.
     for attempt in range(8):
         pods = api.listing("/pods", "pods")
@@ -313,28 +302,38 @@ def cleanup(api):
             or (state.get("pod_id") and p.get("id") == state["pod_id"])
         ]
         if not matches:
-            # Require repeated independent inventories to cover delayed create visibility.
-            if attempt >= 2 and state.get("pod_id"):
-                elapsed = time.time() - state["started_epoch"]
-                estimate = state["cost"].get("prior_spend_reserve_usd", 0) + elapsed / 3600 * (
-                    state["cost"]["gpu_hourly_usd"] + DISK_HOURLY
-                )
-                save(
-                    "cleanup.json",
-                    {
-                        "status": "verified_absent",
-                        "name": state["name"],
-                        "checked_epoch": time.time(),
-                        "elapsed_billing_bound_s": elapsed,
-                        "estimated_total_usd": estimate,
-                        "within_budget": estimate <= 1,
-                        "persistent_volumes_created": False,
-                    },
-                )
-                if estimate > 1:
+            absent_checks += 1
+            # A create intent without an ID gets the full reconciliation window.
+            # Absence proves current inventory state, not zero historical billing.
+            required = 8 if "started_epoch" in state and not state.get("pod_id") else 3
+            if absent_checks >= required:
+                evidence = {
+                    "status": "verified_absent",
+                    "name": state["name"],
+                    "checked_epoch": time.time(),
+                    "consecutive_absent_checks": absent_checks,
+                    "creation_confirmed": bool(state.get("pod_id")),
+                }
+                if "started_epoch" in state:
+                    elapsed = max(0, time.time() - state["started_epoch"])
+                    estimate = state["cost"].get("prior_spend_reserve_usd", 0) + elapsed / 3600 * (
+                        state["cost"]["gpu_hourly_usd"] + DISK_HOURLY
+                    )
+                    evidence.update(
+                        elapsed_billing_bound_s=elapsed,
+                        estimated_total_usd=estimate,
+                        within_budget=estimate <= 1,
+                        persistent_volumes_created=False,
+                        cost_basis="conservative_intent_to_absence_estimate_not_invoice",
+                    )
+                else:
+                    evidence["cost"] = "unverified_no_local_intent"
+                save("cleanup.json", evidence)
+                if evidence.get("within_budget") is False:
                     raise RuntimeError("Estimated spend exceeded authorization")
                 return
         else:
+            absent_checks = 0
             if len(matches) != 1 or not owned(matches[0], state):
                 raise RuntimeError("Cleanup ownership mismatch; refusing unrelated deletion")
             pod_id = matches[0].get("id", "")
@@ -342,13 +341,22 @@ def cleanup(api):
                 raise RuntimeError("Invalid Pod ID")
             if matches[0].get("mounts"):
                 raise RuntimeError("Unexpected persistent mount; inspect before deletion")
+            if "started_epoch" not in state:
+                started = float(matches[0]["env"]["FAAC_STARTED"])
+                if not finite(started, 1) or started > time.time():
+                    raise RuntimeError("Invalid recovered start time")
+                state.update(
+                    started_epoch=started,
+                    cost=quote(float(matches[0]["env"]["FAAC_RATE"])),
+                )
             state["pod_id"] = pod_id
             save("provision.json", state)
             try:
                 api.call("/pods/" + pod_id, "DELETE")
             except RuntimeError:
                 pass  # DELETE outcome is reconciled by next inventory, never claimed successful.
-        time.sleep(10)
+        if attempt < 7:
+            time.sleep(10)
     save("cleanup.json", {"status": "unknown", "name": state["name"]})
     raise RuntimeError("Owned Pod removal not verified; inspect immediately")
 
@@ -455,7 +463,17 @@ def launch(api):
     }
     signal.alarm(evidence["cost"]["work_seconds"])
     try:
-        pod = api.call("/pods", "POST", payload)  # never retried, including unknown outcome
+        try:
+            pod = api.call("/pods", "POST", payload)  # never retry a create
+        except RuntimeError as exc:
+            error = {"status": "create_not_confirmed", "checked_epoch": time.time()}
+            if isinstance(exc, RemoteHTTPError):
+                error.update(http_status=exc.status, categories=exc.categories)
+            else:
+                error["categories"] = ["transport_or_response_error"]
+            # Never serialize the request body, environment, tokens or raw error text.
+            save("create-error.json", error)
+            raise
         pod_id = pod.get("id", "")
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", pod_id):
             raise RuntimeError("Create returned no valid Pod ID; reconcile by name")
