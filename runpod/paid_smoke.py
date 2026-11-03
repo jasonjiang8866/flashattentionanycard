@@ -137,6 +137,7 @@ def preflight(api):
         raise RuntimeError("An owned Pod already exists; cleanup and inspect before launch")
     choices, catalog = [], []
     for name in GPUS:
+        entry = {"gpu": name, "rate": None, "regions": []}
         try:
             data = api.call(
                 "/catalog/gpus/"
@@ -144,6 +145,7 @@ def preflight(api):
                 + "?include=AVAILABILITY&product=POD&cloud=SECURE&count=1&minCudaVersion=12.8"
             )
             rate = data.get("price", {}).get("secure")
+            entry["rate"] = rate if finite(rate) else None
             cost = quote(rate)
             regions = sorted(
                 d["id"]
@@ -151,11 +153,26 @@ def preflight(api):
                 if d.get("availability") in {"LOW", "MEDIUM", "HIGH"}
                 and re.fullmatch(r"[A-Za-z0-9-]+", d.get("id", ""))
             )
-            catalog.append({"gpu": name, "rate": rate, "regions": regions})
+            entry.update(regions=regions, status="available" if regions else "no_capacity")
             if regions:
                 choices.append((rate, name, regions, cost))
-        except (RuntimeError, ValueError):
-            catalog.append({"gpu": name, "status": "unavailable or price unverified"})
+        except ValueError:
+            entry["status"] = "quote_rejected"
+        except RuntimeError as exc:
+            entry["status"] = "catalog_request_failed"
+            # Preserve only a fixed HTTP code, never provider text or credentials.
+            match = re.search(r"Remote HTTP ([0-9]{3});", str(exc))
+            if match:
+                entry["http_status"] = int(match.group(1))
+        catalog.append(entry)
+    # Failed read-only preflight must leave evidence, too. No admission rule changes.
+    evidence.update(
+        status="catalog_checked" if choices else "blocked_no_approved_gpu",
+        read_only=True,
+        catalog=catalog,
+        checked_epoch=time.time(),
+    )
+    save("preflight.json", evidence)
     if not choices:
         raise RuntimeError("No approved GPU with verified price/capacity")
     rate, name, regions, cost = min(choices)
