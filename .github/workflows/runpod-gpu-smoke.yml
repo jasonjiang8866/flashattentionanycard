@@ -1,0 +1,69 @@
+name: RunPod GPU smoke ($1 authorization)
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_paid_smoke:
+        description: 'Use the one-off 2026-11-03 $1 authorization (no automatic retry)'
+        type: boolean
+        required: true
+        default: false
+      expected_sha:
+        description: 'Full current main SHA; required for a paid run'
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: runpod-faac-usd1
+  cancel-in-progress: false
+jobs:
+  smoke:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Offline controller tests
+        run: python -m unittest discover -s runpod/tests -v
+      - name: Live read-only preflight
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: python -m runpod.paid_smoke preflight
+      - name: Consume one-off authorization before any create request
+        if: inputs.confirm_paid_smoke && github.run_attempt == 1
+        run: |
+          mkdir -p runpod-authorization
+          printf '%s\n' "$GITHUB_RUN_ID" > runpod-authorization/run-id.txt
+      - uses: actions/upload-artifact@v4
+        if: inputs.confirm_paid_smoke && github.run_attempt == 1
+        with:
+          name: runpod-authorization-faac-20261103-usd1
+          path: runpod-authorization/
+          retention-days: 90
+          if-no-files-found: error
+      - name: Create, monitor, retrieve, verify and delete one GPU Pod
+        if: inputs.confirm_paid_smoke
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          CONFIRM_PAID: ${{ inputs.confirm_paid_smoke }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: python -m runpod.paid_smoke run
+      - name: Independently verify owned Pod cleanup
+        if: always() && inputs.confirm_paid_smoke
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: python -m runpod.paid_smoke cleanup
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runpod-gpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: runpod-results/
+          retention-days: 30
+          if-no-files-found: warn

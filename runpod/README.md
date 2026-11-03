@@ -265,3 +265,9 @@ CI 的 Docker 构建/离线编译通过仍不等于真实 GPU 实验已通过。
 - [RunPod storage types](https://docs.runpod.io/pods/storage/types)
 - [RunPod custom templates](https://docs.runpod.io/pods/templates/create-custom-template)
 - [PyTorch previous-version CUDA wheels](https://pytorch.org/get-started/previous-versions/)
+
+## Budget-controlled Actions GPU smoke
+
+Use [GPU_SMOKE.md](GPU_SMOKE.md) for the one-off $1 experiment through the existing
+`RUNPOD_API_KEY` repository secret. This manual workflow reuses the verified image,
+queries current GPU prices, retrieves CUDA evidence and verifies owned Pod cleanup.
