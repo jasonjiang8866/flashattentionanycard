@@ -1,5 +1,6 @@
 """Injected into the pinned image; no RunPod or GitHub account credentials."""
 
+import base64
 import hashlib
 import hmac
 import json
@@ -144,6 +145,17 @@ def work():
             child.wait()
         if ARCHIVE.is_file() and 0 < ARCHIVE.stat().st_size <= 64 * 1024 * 1024:
             result["archive"] = {"size": ARCHIVE.stat().st_size, "sha256": digest(ARCHIVE)}
+            if ARCHIVE.stat().st_size <= 128 * 1024:
+                result["archive_inline_base64"] = base64.b64encode(ARCHIVE.read_bytes()).decode()
+        # Keep failure diagnostics even if the separate binary download endpoint fails.
+        status_file = OUTPUT / "status.json"
+        if status_file.is_file():
+            status = json.loads(status_file.read_text())
+            result["suite_status"] = {
+                key: status[key]
+                for key in ("status", "phase", "error", "gpu_test_count", "completed_studies")
+                if key in status
+            }
         timing = OUTPUT.with_suffix(".timing.json")
         if timing.is_file():
             result["timing"] = json.loads(timing.read_text())

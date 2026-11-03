@@ -89,3 +89,25 @@ Run `python -m unittest discover -s runpod/tests -v`, repository CPU pytest, Ruf
 workflow YAML validation. These checks use mocks and local synthetic files; they
 make no paid requests. Live API/schema, availability, account budget and actual CUDA
 results remain unverified until the manual workflow runs.
+
+## Reconciled first attempt and bounded retry
+
+[Run 41577245210](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41577245210)
+selected an RTX 3090 at $0.50/hour after capacity returned. The suite failed after
+6.73 seconds; binary archive retrieval then returned HTTP 403. This is **rejected**,
+not an accepted CUDA result. The exact suite error was not available in the first
+worker's summary. Pod `z69aqds1wz4d90` was deleted and its absence independently
+confirmed by [recovery 41577845509](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41577845509).
+The conservative elapsed-time estimate, including disk, was $0.0483414.
+
+The same user authorization explicitly includes retries. Reserve **$0.06** for this
+reconciled attempt and admit only one further attempt under the **same $1 aggregate
+cap**. Keep the original authorization artifact; only its exact run/artifact identity
+is reconciled. Any additional unreconciled run still blocks launch. New cost records
+include the prior spend reserve. No automatic retry was added.
+
+Binary archive requests now use the same explicit headers as JSON result requests.
+Small archives (<=128 KiB) are also carried in the authenticated JSON result and must
+pass the same exact size/hash checks. Suite phase/error evidence is retained in the
+summary even when a separate download fails. The cause of the original HTTP 403
+and suite failure remains unconfirmed until live diagnostic evidence is recovered.
