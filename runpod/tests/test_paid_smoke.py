@@ -62,6 +62,43 @@ class ControllerTests(unittest.TestCase):
             },
         }
 
+    def test_failed_preflight_preserves_capacity_evidence(self):
+        api = Mock()
+        api.listing.return_value = []
+        api.call.return_value = {"price": {"secure": 0.69}, "dataCenters": []}
+        with patch.object(c, "provenance", return_value={}), patch.object(c, "budget") as budget:
+            with self.assertRaises(RuntimeError):
+                c.preflight(api)
+            budget.assert_not_called()
+        evidence = json.loads((self.out / "preflight.json").read_text())
+        self.assertEqual(evidence["status"], "blocked_no_approved_gpu")
+        self.assertTrue(evidence["read_only"])
+        self.assertEqual(len(evidence["catalog"]), 4)
+        self.assertTrue(all(x["status"] == "no_capacity" for x in evidence["catalog"]))
+        self.assertTrue(all(len(call.args) == 1 for call in api.call.call_args_list))
+
+    def test_failed_preflight_does_not_expose_provider_error_text(self):
+        api = Mock()
+        api.listing.return_value = []
+        api.call.side_effect = RuntimeError("Remote HTTP 403; secret-test-value")
+        with patch.object(c, "provenance", return_value={}), self.assertRaises(RuntimeError):
+            c.preflight(api)
+        text = (self.out / "preflight.json").read_text()
+        self.assertNotIn("secret-test-value", text)
+        evidence = json.loads(text)
+        self.assertTrue(all(x["http_status"] == 403 for x in evidence["catalog"]))
+        self.assertTrue(all(x["status"] == "catalog_request_failed" for x in evidence["catalog"]))
+
+    def test_failed_preflight_distinguishes_invalid_quote(self):
+        api = Mock()
+        api.listing.return_value = []
+        api.call.return_value = {"price": {"secure": float("nan")}, "dataCenters": []}
+        with patch.object(c, "provenance", return_value={}), self.assertRaises(RuntimeError):
+            c.preflight(api)
+        evidence = json.loads((self.out / "preflight.json").read_text())
+        self.assertTrue(all(x["status"] == "quote_rejected" for x in evidence["catalog"]))
+        self.assertTrue(all(x["rate"] is None for x in evidence["catalog"]))
+
     def test_budget_includes_disk_and_cleanup(self):
         for rate in (0.20, 0.69, 1.5):
             q = c.quote(rate)
