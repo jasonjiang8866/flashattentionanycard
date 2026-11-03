@@ -242,13 +242,14 @@ def validate_junit(path):
 
 
 def gpu_tests(output, device):
-    # Tests use cuda:0 internally; remap the requested logical device to physical UUID.
+    # Preserve the parent's CUDA enumeration (including MIG/container masks).
+    # torch's raw UUID is identity evidence, not a CUDA_VISIBLE_DEVICES selector.
     from bo_kernel_tuner.tuner.hardware import Hardware
 
     hardware = Hardware.detect(device)
     if hardware.uuid == "unknown":
         raise RuntimeError("GPU UUID unavailable; cannot reliably select the device for tests")
-    env = dict(os.environ, CUDA_VISIBLE_DEVICES=hardware.uuid)
+    env = dict(os.environ, BO_TEST_CUDA_DEVICE=str(device), BO_TEST_CUDA_UUID=hardware.uuid)
     run_logged(
         [
             sys.executable,

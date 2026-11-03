@@ -61,12 +61,16 @@ MARKER = "runpod-authorization-" + AUTHORIZATION
 # Run 41675121064: POST returned HTTP 400, no Pod ID; recovery 41675661222
 # verified absence. Reserve the entire 179.272 s intent-to-recovery interval
 # at quoted GPU+disk rate ($0.034657), rather than claiming zero billed cost.
+# Run 41686672779: MIG allocated, 19 GPU tests skipped; Pod hrv09j5hib0tgt
+# deleted and recovery 41687375001 verified absence. Reserve $0.06 more for
+# the full 280.470026 s intent-to-recovery interval ($0.0542205 including disk).
 RECONCILED_MARKERS = {
     "41577245210": 13204770313,
     "41668287039": 13245909643,
     "41675121064": 13249184469,
+    "41686672779": 13254599148,
 }
-PRIOR_SPEND_RESERVE = 0.10
+PRIOR_SPEND_RESERVE = 0.16
 
 
 def save(name, value):
