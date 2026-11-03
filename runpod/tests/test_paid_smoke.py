@@ -7,11 +7,13 @@ import tarfile
 import tempfile
 import time
 import unittest
+import urllib.error
 import urllib.parse
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from runpod import paid_smoke as c
+from runpod import provider
 from runpod.provider import REPOSITORY, SOURCE, Runpod
 from runpod.verify_paid import verify_archive
 
@@ -172,11 +174,11 @@ class ControllerTests(unittest.TestCase):
     def test_cleanup_requires_repeated_absence(self):
         c.save("provision.json", self.state())
         api = Mock()
-        api.listing.side_effect = [[self.pod()], [], []]
+        api.listing.side_effect = [[self.pod()], [], [], []]
         with patch.object(c.time, "sleep"):
             c.cleanup(api)
         api.call.assert_called_once_with("/pods/pod1", "DELETE")
-        self.assertEqual(api.listing.call_count, 3)
+        self.assertEqual(api.listing.call_count, 4)
         self.assertEqual(
             json.loads((self.out / "cleanup.json").read_text())["status"], "verified_absent"
         )
@@ -186,7 +188,7 @@ class ControllerTests(unittest.TestCase):
         state["pod_id"] = None
         c.save("provision.json", state)
         api = Mock()
-        api.listing.side_effect = [[], [self.pod()], []]
+        api.listing.side_effect = [[], [self.pod()], [], [], []]
         with patch.object(c.time, "sleep"):
             c.cleanup(api)
         api.call.assert_called_once_with("/pods/pod1", "DELETE")
@@ -194,7 +196,7 @@ class ControllerTests(unittest.TestCase):
     def test_cleanup_unknown_delete_reconciled(self):
         c.save("provision.json", self.state())
         api = Mock()
-        api.listing.side_effect = [[self.pod()], [], []]
+        api.listing.side_effect = [[self.pod()], [], [], []]
         api.call.side_effect = RuntimeError("timeout")
         with patch.object(c.time, "sleep"):
             c.cleanup(api)
@@ -218,10 +220,55 @@ class ControllerTests(unittest.TestCase):
 
     def test_fresh_runner_cleanup(self):
         api = Mock()
-        api.listing.side_effect = [[self.pod()], [self.pod()], [], []]
+        api.listing.side_effect = [[self.pod()], [], [], []]
         with patch.object(c.time, "sleep"):
             c.cleanup(api)
         api.call.assert_called_once_with("/pods/pod1", "DELETE")
+
+    def test_no_id_absence_is_verified_without_claiming_zero_cost(self):
+        state = self.state()
+        state["pod_id"] = None
+        state["started_epoch"] -= 60
+        c.save("provision.json", state)
+        api = Mock()
+        api.listing.return_value = []
+        with patch.object(c.time, "sleep"):
+            c.cleanup(api)
+        result = json.loads((self.out / "cleanup.json").read_text())
+        self.assertEqual(result["status"], "verified_absent")
+        self.assertEqual(result["consecutive_absent_checks"], 8)
+        self.assertEqual(api.listing.call_count, 8)
+        self.assertFalse(result["creation_confirmed"])
+        self.assertGreater(result["estimated_total_usd"], c.PRIOR_SPEND_RESERVE)
+        api.call.assert_not_called()
+
+    def test_fresh_recovery_requires_repeated_absence(self):
+        api = Mock()
+        api.listing.return_value = []
+        with patch.object(c.time, "sleep"):
+            c.cleanup(api)
+        self.assertEqual(api.listing.call_count, 3)
+        result = json.loads((self.out / "cleanup.json").read_text())
+        self.assertEqual(result["cost"], "unverified_no_local_intent")
+
+    def test_delayed_creation_resets_consecutive_absence(self):
+        state = self.state()
+        state["pod_id"] = None
+        c.save("provision.json", state)
+        api = Mock()
+        api.listing.side_effect = [[], [], [self.pod()], [], [], []]
+        with patch.object(c.time, "sleep"):
+            c.cleanup(api)
+        self.assertEqual(api.listing.call_count, 6)
+        api.call.assert_called_once_with("/pods/pod1", "DELETE")
+
+    def test_inventory_error_invalidates_stale_cleanup_success(self):
+        c.save("cleanup.json", {"status": "verified_absent"})
+        api = Mock()
+        api.listing.side_effect = RuntimeError("inventory unavailable")
+        with self.assertRaises(RuntimeError):
+            c.cleanup(api)
+        self.assertEqual(json.loads((self.out / "cleanup.json").read_text())["status"], "unknown")
 
     def test_cleanup_failure_never_claims_success(self):
         c.save("provision.json", self.state())
@@ -255,6 +302,52 @@ class ControllerTests(unittest.TestCase):
         self.assertNotIn("GH_TOKEN", payload["env"])
         self.assertNotIn("FAAC_RESULT_TOKEN", (self.out / "provision.json").read_text())
         cleanup.assert_called_once_with(api)
+
+    def test_create_http_error_has_sanitized_artifact_before_cleanup(self):
+        api = Mock()
+        api.call.side_effect = provider.RemoteHTTPError(400, ["capacity"])
+        evidence = {
+            "cost": c.quote(0.69),
+            "gpu": c.MIG,
+            "regions": ["US-TEST-1"],
+            "config_sha256": "b" * 64,
+            "controller_sha": "a" * 40,
+        }
+
+        def check_cleanup(_):
+            result = json.loads((self.out / "create-error.json").read_text())
+            self.assertEqual(result["http_status"], 400)
+            self.assertEqual(result["categories"], ["capacity"])
+            self.assertEqual(result["status"], "create_not_confirmed")
+
+        with (
+            patch.object(c, "authorization_guard"),
+            patch.object(c, "preflight", return_value=evidence),
+            patch.object(c, "cleanup", side_effect=check_cleanup),
+            patch("builtins.print"),
+            self.assertRaises(provider.RemoteHTTPError),
+        ):
+            c.launch(api)
+        api.call.assert_called_once()
+
+    def test_provider_error_categories_never_include_raw_body(self):
+        for detail, expected in (
+            ("There are no longer any instances available", "capacity"),
+            ("insufficient memory", "memory"),
+            ("invalid minCudaVersion", "cuda"),
+            ("unrecognized response", "unclassified"),
+        ):
+            raw = json.dumps({"detail": detail, "echo": "secret-test-value"}).encode()
+            opener = Mock()
+            opener.open.side_effect = urllib.error.HTTPError(
+                "https://test.invalid/pods", 400, "Bad Request", {}, io.BytesIO(raw)
+            )
+            with patch.object(provider.urllib.request, "build_opener", return_value=opener):
+                with self.assertRaises(provider.RemoteHTTPError) as caught:
+                    provider.request("https://test.invalid/pods", token="test-token")
+            self.assertIn(expected, caught.exception.categories)
+            self.assertNotIn("secret-test-value", str(caught.exception))
+            self.assertNotIn("test-token", str(caught.exception))
 
     def test_auth_rejects_second_attempt_or_wrong_branch(self):
         for variable, value in (
@@ -335,8 +428,8 @@ class ControllerTests(unittest.TestCase):
                 c.download("https://test.invalid/archive", "test-token", expected, "a" * 180001)
 
     def test_reconciled_retry_preserves_total_cap(self):
-        self.assertEqual(c.PRIOR_SPEND_RESERVE, 0.06)
-        self.assertGreater(c.PRIOR_SPEND_RESERVE, 0.0483414)
+        self.assertEqual(c.PRIOR_SPEND_RESERVE, 0.10)
+        self.assertGreater(c.PRIOR_SPEND_RESERVE, 0.06 + 0.0346567)
         for rate in (0.5, 0.69, 1.5):
             q = c.quote(rate)
             estimate = (
@@ -370,6 +463,8 @@ class ControllerTests(unittest.TestCase):
             (41668287039, 999, False),
             (41668287039, None, False),
             (999, 13245909643, False),
+            (41675121064, 13249184469, True),
+            (41675121064, 999, False),
         ):
             with self.subTest(run=run, marker=marker):
                 previous = {"name": c.MARKER, "workflow_run": {"id": run}, "id": marker}
