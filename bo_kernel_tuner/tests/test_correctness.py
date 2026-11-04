@@ -1,5 +1,7 @@
 """CPU legality tests plus real CUDA correctness tests (never mocked as GPU passes)."""
 
+import os
+
 import pytest
 
 from bo_kernel_tuner.configs.search_spaces import Workload, grid_configs, grid_size, search_space
@@ -53,45 +55,62 @@ def test_invalid_workload(kwargs):
         Workload(**kwargs)
 
 
+def selected_cuda_device(torch):
+    device = int(os.environ.get("BO_TEST_CUDA_DEVICE", "0"))
+    if device < 0:
+        raise ValueError("GPU test device must be nonnegative")
+    if (
+        not torch.cuda.is_available()
+        or torch.version.hip
+        or torch.cuda.get_device_capability(device)[0] < 8
+    ):
+        pytest.skip("NVIDIA Ampere+ CUDA device required")
+    hardware = Hardware.detect(device)
+    expected_uuid = os.environ.get("BO_TEST_CUDA_UUID")
+    if expected_uuid is not None and hardware.uuid != expected_uuid:
+        raise RuntimeError("GPU test device differs from the preflight device")
+    torch.cuda.set_device(device)
+    return torch.device(f"cuda:{device}")
+
+
+@pytest.fixture(scope="module")
+def cuda_device():
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("triton")
+    return selected_cuda_device(torch)
+
+
 @pytest.mark.gpu
 @pytest.mark.parametrize("dtype", ["fp16", "bf16"])
 @pytest.mark.parametrize("kernel", ["gemm", "rmsnorm", "moe_grouped_gemm"])
 @pytest.mark.parametrize("shape", [(64, 128, 64), (37, 77, 93), (1, 1, 1)])
-def test_gpu_outputs(kernel, dtype, shape):
-    torch = pytest.importorskip("torch")
-    pytest.importorskip("triton")
-    if (
-        not torch.cuda.is_available()
-        or torch.version.hip
-        or torch.cuda.get_device_capability()[0] < 8
-    ):
-        pytest.skip("NVIDIA Ampere+ CUDA device required")
+def test_gpu_outputs(kernel, dtype, shape, cuda_device):
+    import torch
+
     from bo_kernel_tuner.tuner.worker import check_output, prepare
 
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.set_float32_matmul_precision("highest")
-    hardware = Hardware.detect(0)
+    hardware = Hardware.detect(cuda_device.index)
     m, n, k = shape
     w = Workload(kernel, m, n, k, dtype, (0, 1, 33, 0, 9))
     # Includes masked tails, zero experts, grouped M boundaries, and persistent scheduling.
     for p in grid_configs(search_space(kernel, "smoke")):
         for seed in (0, 17):
-            call, out, reference = prepare(w, torch.device("cuda:0"), seed, hardware.sm_count)
+            call, out, reference = prepare(w, cuda_device, seed, hardware.sm_count)
             out.fill_(float("nan"))
             call(p)
-            torch.cuda.synchronize()
+            torch.cuda.synchronize(cuda_device)
             check_output(out, reference, dtype)
 
 
 @pytest.mark.gpu
-def test_cuda_measurement():
-    torch = pytest.importorskip("torch")
-    pytest.importorskip("triton")
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA device required")
+def test_cuda_measurement(cuda_device):
+    import torch
+
     from bo_kernel_tuner.tuner.worker import Measurement, measure
 
-    x = torch.ones(1024, device="cuda")
+    x = torch.ones(1024, device=cuda_device)
     result = measure(lambda: x.add_(1), Measurement(2, 3, 2, 1))
     assert len(result["samples_ms"]) == 3
     assert result["latency_ms"] > 0

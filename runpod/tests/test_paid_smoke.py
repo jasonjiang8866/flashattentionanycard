@@ -163,7 +163,8 @@ class ControllerTests(unittest.TestCase):
             q = c.quote(rate)
             self.assertLessEqual(q["planned_total_usd"], 0.8)
             self.assertGreaterEqual(q["unallocated_reserve_usd"], 0.2)
-            self.assertEqual(q["work_seconds"], 1200)
+            self.assertGreater(q["work_seconds"], 0)
+            self.assertLessEqual(q["work_seconds"], 1200)
             self.assertGreater(q["disk_hourly_usd"], 0)
 
     def test_bad_prices_rejected(self):
@@ -428,8 +429,8 @@ class ControllerTests(unittest.TestCase):
                 c.download("https://test.invalid/archive", "test-token", expected, "a" * 180001)
 
     def test_reconciled_retry_preserves_total_cap(self):
-        self.assertEqual(c.PRIOR_SPEND_RESERVE, 0.10)
-        self.assertGreater(c.PRIOR_SPEND_RESERVE, 0.06 + 0.0346567)
+        self.assertEqual(c.PRIOR_SPEND_RESERVE, 0.16)
+        self.assertGreater(c.PRIOR_SPEND_RESERVE, 0.10 + 0.0542205)
         for rate in (0.5, 0.69, 1.5):
             q = c.quote(rate)
             estimate = (
@@ -465,6 +466,8 @@ class ControllerTests(unittest.TestCase):
             (999, 13245909643, False),
             (41675121064, 13249184469, True),
             (41675121064, 999, False),
+            (41686672779, 13254599148, True),
+            (41686672779, 999, False),
         ):
             with self.subTest(run=run, marker=marker):
                 previous = {"name": c.MARKER, "workflow_run": {"id": run}, "id": marker}
@@ -489,8 +492,13 @@ class ControllerTests(unittest.TestCase):
         with patch.object(api, "call", return_value={"pods": []}), self.assertRaises(RuntimeError):
             api.listing("/pods", "pods")
 
-    def test_pinned_workload_matches_current_checkout(self):
-        self.assertEqual(c.provenance()["image_source_sha"], SOURCE)
+    def test_provenance_requires_workload_to_match_image(self):
+        with patch.object(c, "git", side_effect=["a" * 40, ""]):
+            self.assertEqual(c.provenance()["image_source_sha"], SOURCE)
+        for changed in ("runpod/launch.py", "bo_kernel_tuner/tests/test_correctness.py"):
+            with patch.object(c, "git", side_effect=["a" * 40, changed]):
+                with self.assertRaisesRegex(RuntimeError, "differs from pinned image"):
+                    c.provenance()
 
     def test_archive_rejects_traversal_symlink_and_duplicate(self):
         for kind in ("traversal", "symlink", "duplicate", "checksum"):

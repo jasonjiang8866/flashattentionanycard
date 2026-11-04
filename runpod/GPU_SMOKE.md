@@ -4,6 +4,16 @@ This entrypoint uses `RUNPOD_API_KEY` only in GitHub Actions and reuses the veri
 [2026-10-30 image publication](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41028932034).
 It does not publish an image. Existing [pilot/bootstrap instructions](PILOT.md) remain available.
 
+## Deployment status after the GPU-test device fix
+
+The device-selection fix changes `runpod/launch.py` and the GPU tests inside the
+image. The historical image/source pin below is intentionally retained for audit;
+it **does not contain the fix**. Paid preflight must reject this checkout while
+that old pin remains. Publish and verify an image from the merged fixed source,
+then review/update `runpod/provider.py`'s immutable `IMAGE` and `SOURCE` together
+before another paid dispatch. Do not bypass the workload/image equality guard or
+patch the container silently. The source [bootstrap path](PILOT.md) remains available.
+
 ## Launch specification
 
 - Workflow: [RunPod GPU smoke ($1 authorization)](https://github.com/jasonjiang8866/flashattentionanycard/actions/workflows/runpod-gpu-smoke.yml).
@@ -26,9 +36,10 @@ It does not publish an image. Existing [pilot/bootstrap instructions](PILOT.md) 
   to match the image source; injected controller worker code is hashed separately.
 - Runtime: at most 20 minutes including provisioning, image pull, CUDA tests, search,
   analysis and archive retrieval; stop work 90 seconds early for result transfer.
-  Reserve another 6 minutes for cleanup. At the maximum GPU rate the compute+disk
-  estimate plus the $0.10 prior-spend reserve is below $0.76, leaving more than
-  $0.24 of the same $1 authorization unused.
+  Reserve another 6 minutes for cleanup. The controller shortens work to 1169 seconds
+  at the maximum GPU rate; the compute+disk
+  estimate plus the $0.16 prior-spend reserve is at most $0.80, leaving at least
+  $0.20 of the same $1 authorization unused.
 - Storage: 40 GB ephemeral container disk, no network/global/persistent volume created.
   Current [official pricing](https://docs.runpod.io/pods/pricing) is $0.10/GB/month,
   charged per second; controller conservatively uses a 28-day month (~$0.00596/hour).
@@ -127,6 +138,48 @@ Run `python -m unittest discover -s runpod/tests -v`, repository CPU pytest, Ruf
 workflow YAML validation. These checks use mocks and local synthetic files; they
 make no paid requests. Live API/schema, availability, account budget and actual CUDA
 results remain unverified until the manual workflow runs.
+
+## 2026-11-04 SGT: MIG allocated; GPU-test visibility defect recovered
+
+[Attempt 41686672779](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41686672779)
+ran controller `5b9ab3449d9be4e86179c65d7abe3d4dcf3aac9c` on the historical
+image above. It allocated Pod `hrv09j5hib0tgt`, PRO 6000 Blackwell MIG 1g.24gb,
+US-WA-1, at $0.69/hour. The main-process CUDA probe passed and reported SM 12.0,
+46 SMs, 25,367,150,592 bytes memory, driver 595.91.07, torch 2.9.0+cu128 and
+Triton 3.5.0. The suite then failed GPU correctness: **19 skipped, 0 studies**,
+with 3.860505 seconds suite active time. This is rejected, not a performance result.
+
+The recovered manifest contains raw PyTorch UUID
+`93d291a5-179b-d293-cb6e-df9811e6cd57`. The launcher overwrote the pytest child's
+`CUDA_VISIBLE_DEVICES` with that bare UUID, and the child reported no CUDA device.
+[NVIDIA's documented selectors](https://docs.nvidia.com/cuda/archive/13.1.1/cuda-programming-guide/05-appendices/environment-variables.html)
+use numeric indices or GPU/MIG-prefixed identifiers; the bare property string is
+not a valid selector. This code defect and the parent/child discrepancy explain
+the observed failure; the fix still requires a new real-GPU validation run.
+
+The fix preserves inherited CUDA visibility/order, passes the selected logical
+index explicitly, and requires the test device UUID to match preflight. Both the
+18 numerical cases and measurement test use that device. No skip, correctness,
+measurement or acceptance threshold is relaxed.
+
+The controller deleted the Pod and confirmed three consecutive empty inventories.
+Its cost estimate was $0.146231 including the earlier $0.10 reserve. Independent
+[recovery 41687375001](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41687375001)
+again confirmed three consecutive empty inventories at 01:46:27 SGT. For the next
+admission, conservatively include the entire 280.470025-second interval from
+create intent through that later check: $0.0542205 GPU+disk, plus the old $0.10
+reserve. Round cumulative reserved spend up to **$0.16** within the same $1 cap.
+These are estimates, not invoices. No persistent volume was created.
+
+Keep authorization artifact `13254599148`; reconcile only that exact run/artifact
+pair. Evidence files were recovered and their ZIP, archive and member hashes verified:
+
+| Artifact | SHA256 |
+| --- | --- |
+| Preflight `13255352474` | `72e690ef6094ab947800b01bf4b856178615c3c5ac9150fb116dbba08545b7f2` |
+| Attempt `13255995276` | `1b003ae67c6d1ca8485840a50b79144a59213a9de5fd84d3a6167c793af32836` |
+| Recovery `13256980079` | `0d1975fbef0ff4aa2183dff70cbbd92066afe1f62e7d647dd94a5786e964577d` |
+| Nested `smoke.tar.gz` | `b863bcce100fc445b2af7813f8c6d8c7f9d8e0e1fce2f087a20f7454391cebe6` |
 
 ## 2026-11-04 SGT: create rejected, independent absence verified
 

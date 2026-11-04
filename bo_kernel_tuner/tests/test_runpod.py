@@ -264,19 +264,78 @@ def test_suite_transfer_remeasures_source_candidates(suite, monkeypatch):
     assert result["trials"][0]["attrs"]["warm_start_rank"] == 0
 
 
-def test_gpu_checks_remap_selected_device_uuid(tmp_path, hardware, monkeypatch):
+@pytest.mark.parametrize(
+    "visible", [None, "3,1,2", "GPU-first,GPU-second,GPU-third", "MIG-example"]
+)
+def test_gpu_checks_preserve_visibility(tmp_path, hardware, monkeypatch, visible):
     from dataclasses import replace
 
     from bo_kernel_tuner.tuner.hardware import Hardware
 
-    selected = replace(hardware, device=2, uuid="GPU-example-uuid")
+    # Match the raw PyTorch UUID observed in run 41686672779.
+    selected = replace(hardware, device=2, uuid="93d291a5-179b-d293-cb6e-df9811e6cd57")
+    if visible is None:
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    else:
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visible)
+    monkeypatch.setenv("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     monkeypatch.setattr(
         Hardware, "detect", lambda device: selected if device == 2 else pytest.fail("wrong device")
     )
 
     def command(args, path, env):
-        assert env["CUDA_VISIBLE_DEVICES"] == "GPU-example-uuid"
+        assert env.get("CUDA_VISIBLE_DEVICES") == visible
+        assert env["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+        assert env["BO_TEST_CUDA_DEVICE"] == "2"
+        assert env["BO_TEST_CUDA_UUID"] == selected.uuid
         junit(tmp_path / "gpu-tests.xml")
 
     monkeypatch.setattr(launch, "run_logged", command)
     assert launch.gpu_tests(tmp_path, 2) == 19
+
+
+@pytest.mark.parametrize("requested", [None, "0", "2"])
+def test_gpu_fixture_uses_selected_logical_device(hardware, monkeypatch, requested):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bo_kernel_tuner.tests.test_correctness import selected_cuda_device
+    from bo_kernel_tuner.tuner.hardware import Hardware
+
+    index = int(requested or "0")
+    selected = replace(hardware, device=index, uuid="raw-pytorch-uuid")
+    if requested is None:
+        monkeypatch.delenv("BO_TEST_CUDA_DEVICE", raising=False)
+    else:
+        monkeypatch.setenv("BO_TEST_CUDA_DEVICE", requested)
+    monkeypatch.setenv("BO_TEST_CUDA_UUID", selected.uuid)
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            get_device_capability=Mock(return_value=(12, 0)),
+            set_device=Mock(),
+        ),
+        version=SimpleNamespace(hip=None),
+        device=lambda value: value,
+    )
+    detect = Mock(return_value=selected)
+    monkeypatch.setattr(Hardware, "detect", detect)
+    assert selected_cuda_device(torch) == f"cuda:{index}"
+    torch.cuda.get_device_capability.assert_called_once_with(index)
+    torch.cuda.set_device.assert_called_once_with(index)
+    detect.assert_called_once_with(index)
+    monkeypatch.setenv("BO_TEST_CUDA_UUID", "different-device")
+    with pytest.raises(RuntimeError, match="differs from the preflight device"):
+        selected_cuda_device(torch)
+    # A mismatch must not switch to an unintended device.
+    torch.cuda.set_device.assert_called_once_with(index)
+
+
+@pytest.mark.parametrize("requested", ["-1", "invalid"])
+def test_gpu_fixture_rejects_invalid_selection(monkeypatch, requested):
+    from bo_kernel_tuner.tests.test_correctness import selected_cuda_device
+
+    monkeypatch.setenv("BO_TEST_CUDA_DEVICE", requested)
+    with pytest.raises(ValueError):
+        selected_cuda_device(None)
