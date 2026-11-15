@@ -1,5 +1,25 @@
 # One-off $1 RunPod GPU smoke
 
+## M0 accepted — 2026-11-16 SGT
+
+[Run 43743010737](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43743010737)
+at controller `17564f2eeaf6a071831b3df4ca297ffcd9adfadd` passed 19 GPU tests (zero
+failures/errors/skips), 18 studies and 36 attempts. The downloaded archive independently
+passed verification. The allocated GPU was PRO 6000 Blackwell MIG 24GB in US-PA-1
+at $0.69/hour; RTX 3090 had no capacity at the final creation preflight.
+[Recovery 43743491986](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43743491986)
+confirmed the exact run's Pod absent in three consecutive inventories. The conservative
+intent-to-independent-absence window was 318.414 seconds, estimated incremental GPU+disk
+cost $0.061556, or $0.221556 including the earlier $0.16 reserve (not an invoice).
+
+Result artifact: `14173576818`, SHA-256
+`3ceb96fcb1ab9609dc407b3956cfba993621f6cc1bfd992dcbe10662d6ba183c`.
+Cleanup artifact: `14173507312`, SHA-256
+`93c39ff99baeb2224c89e0806bd3350266dc13e36b4a54e143af254fe3405665`.
+The consumed authorization marker `14173177303` is retained; this documentation does
+not reset the ledger or authorize another creation. M1 requires new workload/image
+provenance and separate acceptance of its [measurement protocol](MEASUREMENT.md).
+
 This entrypoint uses `RUNPOD_API_KEY` only in GitHub Actions and reuses the verified
 [2026-11-05 SGT image publication](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41934750064).
 It does not publish an image. Existing [pilot/bootstrap instructions](PILOT.md) remain available.
@@ -11,7 +31,7 @@ fix from PR #9. Publication verified the remote digest, pulled it by digest and 
 its OCI revision label; **114 offline tests passed, 19 GPU tests were deselected**.
 The workload/image equality guard remains enforced. Controller-only changes in this
 PR reuse that image; no workload, search configuration or numerical gate is changed.
-A successful real-GPU rerun is still required before M0 can be called accepted.
+The successful real-GPU rerun above completes M0; it does not validate subsequent M1 changes.
 
 The proposed continuation cutoff is **2026-11-23 00:00 UTC (08:00 SGT)**, replacing the
 old controller cutoff of 2026-11-10 00:00 UTC. This keeps the same authorization ID,

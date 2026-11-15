@@ -36,6 +36,7 @@ def cohort_key(run, include_hardware=True):
         "trial_timeout_s",
     ]
     data = {key: meta[key] for key in keys}
+    data["precision_policy"] = meta.get("precision_policy")
     data["software_versions"] = meta["environment"]["versions"]
     if include_hardware:
         data["hardware"] = {k: v for k, v in meta["hardware"].items() if k != "device"}

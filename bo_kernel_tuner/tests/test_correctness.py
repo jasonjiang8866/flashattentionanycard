@@ -114,3 +114,34 @@ def test_cuda_measurement(cuda_device):
     result = measure(lambda: x.add_(1), Measurement(2, 3, 2, 1))
     assert len(result["samples_ms"]) == 3
     assert result["latency_ms"] > 0
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("kernel", ["gemm", "rmsnorm", "moe_grouped_gemm"])
+@pytest.mark.parametrize("dtype", ["fp16", "bf16"])
+def test_paired_baseline_cuda_graph(kernel, dtype, cuda_device):
+    from dataclasses import asdict
+
+    from bo_kernel_tuner.tuner.confirmation import validate_pair
+    from bo_kernel_tuner.tuner.worker import Measurement, evaluate_confirmation
+
+    workload = Workload(kernel, 37, 77, 93, dtype, (0, 1, 33, 0, 9))
+    measurement = Measurement(2, 3, 2, 2)
+    order = ["candidate", "torch"] if dtype == "fp16" else ["torch", "candidate"]
+    result = evaluate_confirmation(
+        {
+            "device": cuda_device.index,
+            "workload": asdict(workload),
+            "params": next(grid_configs(search_space(kernel, "smoke"))),
+            "measurement": asdict(measurement),
+            "order": order,
+        }
+    )
+    result["status"] = "ok"
+    validate_pair(
+        result,
+        {"order": order, "data_seed": workload.data_seed},
+        Hardware.detect(cuda_device.index).to_dict(),
+        workload,
+        measurement,
+    )

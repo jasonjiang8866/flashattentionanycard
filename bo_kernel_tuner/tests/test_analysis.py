@@ -29,6 +29,17 @@ def test_hardware_cohorts_are_separate(tmp_path, hardware):
     assert generate([tmp_path / "a", tmp_path / "b"], tmp_path / "figures") == 2
 
 
+def test_precision_policy_separates_cohorts(tmp_path, hardware):
+    import copy
+
+    from bo_kernel_tuner.analysis.plot_metrics import cohort_key
+
+    a = search(tmp_path / "a", hardware, "grid")
+    b = copy.deepcopy(a)
+    b["metadata"]["precision_policy"]["tf32"] = True
+    assert cohort_key(a) != cohort_key(b)
+
+
 def test_duplicate_seed_rejected(tmp_path, hardware):
     search(tmp_path / "a", hardware, "grid")
     search(tmp_path / "b", hardware, "grid")
