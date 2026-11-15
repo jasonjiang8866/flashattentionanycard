@@ -395,6 +395,79 @@ class ControllerTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         c.authorization_guard()
 
+    def test_admission_before_marker_never_contacts_runpod_or_writes_attempt(self):
+        previous = [
+            {"name": c.MARKER, "workflow_run": {"id": int(run)}, "id": marker}
+            for run, marker in c.RECONCILED_MARKERS.items()
+        ]
+        with (
+            patch.object(c, "git", return_value="a" * 40),
+            patch.object(
+                c, "request", side_effect=[{"object": {"sha": "a" * 40}}, {"artifacts": previous}]
+            ) as read,
+            patch.object(c.time, "time", return_value=c.AUTHORIZATION_EXPIRES - 1),
+            patch.object(c, "Runpod") as provider_client,
+            patch("sys.argv", ["paid_smoke", "authorize"]),
+        ):
+            c.main()
+        provider_client.assert_not_called()
+        self.assertEqual(len(list(self.out.iterdir())), 0)
+        self.assertEqual(read.call_count, 2)
+        self.assertTrue(all("method" not in call.kwargs for call in read.call_args_list))
+
+    def test_expiry_boundary_applies_before_marker_and_before_create(self):
+        current = {"name": c.MARKER, "workflow_run": {"id": 1234}, "id": 888}
+        for require_marker in (False, True):
+            for offset in (-1, 0, 1):
+                with (
+                    self.subTest(require_marker=require_marker, offset=offset),
+                    patch.object(c, "git", return_value="a" * 40),
+                    patch.object(c.time, "time", return_value=c.AUTHORIZATION_EXPIRES + offset),
+                    patch.object(
+                        c,
+                        "request",
+                        side_effect=[{"object": {"sha": "a" * 40}}, {"artifacts": [current]}],
+                    ) as read,
+                ):
+                    if offset < 0:
+                        c.authorization_guard(require_marker=require_marker)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "expiry guard failed"):
+                            c.authorization_guard(require_marker=require_marker)
+                        read.assert_not_called()
+
+    def test_admission_rejects_unknown_ledger_and_moved_main(self):
+        for response in (
+            [{"object": {"sha": "b" * 40}}],
+            [
+                {"object": {"sha": "a" * 40}},
+                {"artifacts": [{"name": c.MARKER, "workflow_run": {"id": 99}, "id": 999}]},
+            ],
+        ):
+            with (
+                patch.object(c, "git", return_value="a" * 40),
+                patch.object(c.time, "time", return_value=c.AUTHORIZATION_EXPIRES - 1),
+                patch.object(c, "request", side_effect=response),
+                self.assertRaises(RuntimeError),
+            ):
+                c.authorization_guard(require_marker=False)
+
+    def test_launch_still_requires_marker_and_never_creates_without_it(self):
+        api = Mock()
+        with (
+            patch.object(c, "git", return_value="a" * 40),
+            patch.object(c.time, "time", return_value=c.AUTHORIZATION_EXPIRES - 1),
+            patch.object(
+                c, "request", side_effect=[{"object": {"sha": "a" * 40}}, {"artifacts": []}]
+            ),
+            patch.object(c, "preflight") as preflight,
+            self.assertRaisesRegex(RuntimeError, "marker must be uploaded"),
+        ):
+            c.launch(api)
+        preflight.assert_not_called()
+        api.call.assert_not_called()
+        self.assertFalse((self.out / "provision.json").exists())
+
     def test_download_uses_same_headers_and_checks_bytes(self):
         data = b"diagnostic archive"
         expected = {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}

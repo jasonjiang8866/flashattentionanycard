@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm_paid_smoke:
-        description: 'Use the one-off 2026-11-03 $1 authorization (no automatic retry)'
+        description: 'Continue the same $1 experiment until 2026-11-23 00:00 UTC (no automatic retry)'
         type: boolean
         required: true
         default: false
@@ -31,6 +31,13 @@ jobs:
           python-version: '3.12'
       - name: Offline controller tests
         run: python -m unittest discover -s runpod/tests -v
+      - name: Check paid admission before recording a new attempt
+        if: inputs.confirm_paid_smoke
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONFIRM_PAID: ${{ inputs.confirm_paid_smoke }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: python -m runpod.paid_smoke authorize
       - name: Live read-only preflight
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
