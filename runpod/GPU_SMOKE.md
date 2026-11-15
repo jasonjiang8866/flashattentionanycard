@@ -1,18 +1,30 @@
 # One-off $1 RunPod GPU smoke
 
 This entrypoint uses `RUNPOD_API_KEY` only in GitHub Actions and reuses the verified
-[2026-10-30 image publication](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41028932034).
+[2026-11-05 SGT image publication](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41934750064).
 It does not publish an image. Existing [pilot/bootstrap instructions](PILOT.md) remain available.
 
-## Deployment status after the GPU-test device fix
+## M0 deployment handoff
 
-The device-selection fix changes `runpod/launch.py` and the GPU tests inside the
-image. The historical image/source pin below is intentionally retained for audit;
-it **does not contain the fix**. Paid preflight must reject this checkout while
-that old pin remains. Publish and verify an image from the merged fixed source,
-then review/update `runpod/provider.py`'s immutable `IMAGE` and `SOURCE` together
-before another paid dispatch. Do not bypass the workload/image equality guard or
-patch the container silently. The source [bootstrap path](PILOT.md) remains available.
+The paired `IMAGE` / `SOURCE` pins now select the published GPU-test device-selection
+fix from PR #9. Publication verified the remote digest, pulled it by digest and checked
+its OCI revision label; **114 offline tests passed, 19 GPU tests were deselected**.
+The workload/image equality guard remains enforced. Controller-only changes in this
+PR reuse that image; no workload, search configuration or numerical gate is changed.
+A successful real-GPU rerun is still required before M0 can be called accepted.
+
+The proposed continuation cutoff is **2026-11-23 00:00 UTC (08:00 SGT)**, replacing the
+old controller cutoff of 2026-11-10 00:00 UTC. This keeps the same authorization ID,
+$1 aggregate cap, $0.16 prior-spend reserve and all four reconciled run/artifact pairs.
+It does not reset the ledger or approve a new experiment. On 2026-11-16 SGT, all four
+original marker artifacts were still present and unexpired, expiring on 2027-02-01 UTC.
+The bounded cutoff remains earlier than their retention expiry. Any unknown attempt
+continues to block launch. This PR prepares a manual continuation; it does not launch it.
+
+The failed attempts below used the historical 2026-10-30 image:
+`ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:079df18c23caee6769ee0b70570c5c12863d7e5d0f847e7fb7cec1fb4d1136c3`,
+source `14118cbec5aba88654232b1a2f232be4ca35d1db`. Keep that provenance with the old evidence; those attempts did not
+run the newly selected image.
 
 ## Launch specification
 
@@ -20,7 +32,7 @@ patch the container silently. The source [bootstrap path](PILOT.md) remains avai
 - Ref: `main`. Input `expected_sha`: full current main commit SHA. Input
   `confirm_paid_smoke`: `true` for the authorized experiment; `false` runs read-only preflight.
 - Authorization: `faac-20261103-usd1`, one creation attempt, $1 total including cleanup and
-  temporary disk. Expires 2026-11-10 UTC. No automatic retry or second GPU. All four GPU
+  temporary disk. Controller cutoff: 2026-11-23 00:00 UTC. No automatic retry or second GPU. All four GPU
   types were authorized: RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb, RTX 3090,
   RTX 4090, RTX 5090. Select the cheapest verified available Secure Cloud GPU, one card,
   maximum $1.50/hour. Host CUDA floors are >=12.4 for RTX 3090/4090 and >=12.8
@@ -30,8 +42,8 @@ patch the container silently. The source [bootstrap path](PILOT.md) remains avai
   two validation seeds, synthetic inputs identified by the config hash in artifacts.
   This is a CUDA functionality/measurement smoke, not the two-GPU pilot or a
   cross-architecture warm-start performance result.
-- Image: `ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:079df18c23caee6769ee0b70570c5c12863d7e5d0f847e7fb7cec1fb4d1136c3`.
-  Workload source: `14118cbec5aba88654232b1a2f232be4ca35d1db`. The controller is the
+- Image: `ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:f054f0edf82a8de9e2ff08589472dc91a399b5d89c469384dd0a6c988f9a1501`.
+  Workload source: `d53afd9aa6f3ce68ac896db0924558d1fe72ffe7`. The controller is the
   workflow checkout SHA. Preflight requires all workload/runner/config/dependency files
   to match the image source; injected controller worker code is hashed separately.
 - Runtime: at most 20 minutes including provisioning, image pull, CUDA tests, search,
@@ -81,7 +93,14 @@ References: [NVIDIA minor-version compatibility](https://docs.nvidia.com/deploy/
 
 ## Execution and evidence
 
+The read-only `authorize` mode checks event/ref/SHA/attempt/expiry and the existing
+GitHub ledger **before** the workflow uploads a new authorization artifact. It does
+not instantiate a RunPod client, create a marker or create compute. Read-only capacity
+preflight (`confirm_paid_smoke=false`) remains available independently of that cutoff.
+
 A retained Actions authorization artifact is uploaded **before** the sole `POST /pods`.
+The paid `run` mode repeats the full guard and still requires its own uploaded marker;
+passing the earlier admission check alone cannot create a Pod.
 The controller refuses another run with the same authorization, `run_attempt > 1`, a
 non-manual event, a branch other than main, moved main, or an expired authorization.
 Do not delete the authorization artifact to retry: a failed/unknown attempt requires

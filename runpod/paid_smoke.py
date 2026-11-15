@@ -43,8 +43,9 @@ MIN_CUDA_BY_GPU = {
 GPUS = tuple(MIN_CUDA_BY_GPU)
 OWNER = "FAAC_MANAGED_BY"
 AUTHORIZATION = "faac-20261103-usd1"
-# This authorization cannot be reused after artifact retention expires.
-AUTHORIZATION_EXPIRES = 1794268800  # 2026-11-10 00:00 UTC
+# M0 continuation window; the original 2026-11-10 cutoff is retained in GPU_SMOKE.md.
+# Same ID, total cap and reconciled ledger; never extend past artifact retention.
+AUTHORIZATION_EXPIRES = 1795392000  # 2026-11-23 00:00 UTC
 DISK_GB = 40
 DISK_HOURLY = DISK_GB * 0.10 / (28 * 24)  # conservative 28-day billing month
 CLEANUP_SECONDS = 360
@@ -224,7 +225,7 @@ def preflight(api):
     return evidence
 
 
-def authorization_guard():
+def authorization_guard(*, require_marker=True):
     run = identity()
     if (
         os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
@@ -270,7 +271,7 @@ def authorization_guard():
             break
     else:
         raise RuntimeError("Incomplete authorization ledger")
-    if not marker_seen:
+    if require_marker and not marker_seen:
         raise RuntimeError("Authorization marker must be uploaded before create")
 
 
@@ -545,9 +546,14 @@ def launch(api):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("preflight", "run", "cleanup"))
+    parser.add_argument("mode", choices=("authorize", "preflight", "run", "cleanup"))
     args = parser.parse_args()
     identity()
+    if args.mode == "authorize":
+        # Read GitHub only, before recording a new attempt. launch() still checks
+        # the full guard with the current marker immediately before preflight/create.
+        authorization_guard(require_marker=False)
+        return
     api = Runpod()
     if args.mode == "preflight":
         preflight(api)

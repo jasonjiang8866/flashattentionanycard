@@ -48,7 +48,7 @@ bash runpod/run.sh performance --device 0 \
 | `performance` 加迁移 | 上述配置 + warm TPE | 5 | 120 | 4,480 |
 
 预算受控的 RTX 3090/5090 探索方案、dry-run、独立主机运行与迁移步骤见 [PILOT.md](PILOT.md)。
-2026-10-30 发布镜像已包含 pilot、完整运行计时与新增验证/恢复检查，固定引用见下文。默认入口仍为 smoke。
+2026-11-05 SGT 发布镜像包含 pilot、完整运行计时及 PR #9 的 GPU 测试设备选择修复，固定引用见下文。默认入口仍为 smoke。
 
 smoke 验证执行链路，不能证明 TPE 的收敛优势。performance 包含每个 GEMM/MoE study 50 attempts、RMSNorm 12 attempts；
 每次都独立启动进程并冷编译，完整实验可能耗时数小时，具体以 GPU、编译和测量时间为准。
@@ -177,27 +177,28 @@ gh run list --repo "$REPO" --workflow runpod.yml --event workflow_dispatch --lim
 随后核对远端 SHA 标签指向的 digest、按 digest 拉取并检查镜像 revision label。
 运行 Summary 与 `runpod-publication-<SHA>` artifact 保存实际标签、digest 和验证证据。
 
-### 当前 pilot 镜像（2026-10-30）
+### 当前实验镜像（2026-11-05）
 
-[手动发布与核验记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41028932034) 使用已合并的 main 源码，
+[手动发布与核验记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41934750064) 使用已合并的 main 源码，
 `publish=true`、默认分支和完整 `expected_sha` 门禁均通过。发布前完成 `pip check`、
-smoke dry-run 和 **106 项完整离线测试（19 项 GPU 测试未选中）**；
+smoke dry-run 和 **114 项完整离线测试（19 项 GPU 测试未选中）**；
 发布后核对远端 SHA 标签与 digest，并按 digest 拉取检查 revision label。
 离线 suite 包含 cold/warm pilot 的无 CUDA dry-run、预算、路径无写入、计时与恢复检查。
 这些检查不代表 CUDA 正确性、性能或实际 GPU warm-start 已通过。
 
-- 源码 SHA / `org.opencontainers.image.revision`：`14118cbec5aba88654232b1a2f232be4ca35d1db`。
-- SHA 标签：`ghcr.io/jasonjiang8866/flashattentionanycard-runpod:sha-14118cbec5aba88654232b1a2f232be4ca35d1db`。
-- 不可变 digest：`sha256:079df18c23caee6769ee0b70570c5c12863d7e5d0f847e7fb7cec1fb4d1136c3`。
-- 发布证据：该次 Actions 的 `runpod-publication-14118cbec5aba88654232b1a2f232be4ca35d1db` artifact。
+- 源码 SHA / `org.opencontainers.image.revision`：`d53afd9aa6f3ce68ac896db0924558d1fe72ffe7`。
+- SHA 标签：`ghcr.io/jasonjiang8866/flashattentionanycard-runpod:sha-d53afd9aa6f3ce68ac896db0924558d1fe72ffe7`。
+- 不可变 digest：`sha256:f054f0edf82a8de9e2ff08589472dc91a399b5d89c469384dd0a6c988f9a1501`。
+- 发布证据：该次 Actions 的 `runpod-publication-d53afd9aa6f3ce68ac896db0924558d1fe72ffe7` artifact。
 
 RunPod **Container Image** 固定为：
 
 ```text
-ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:079df18c23caee6769ee0b70570c5c12863d7e5d0f847e7fb7cec1fb4d1136c3
+ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:f054f0edf82a8de9e2ff08589472dc91a399b5d89c469384dd0a6c988f9a1501
 ```
 
-相对下述旧镜像，本版加入 GEMM 2048³ / RMSNorm 4096×4096 FP16 的双 seed pilot、
+本版包含 PR #9 的 GPU 测试设备选择修复，真实 GPU 复验仍待完成；
+保留 GEMM 2048³ / RMSNorm 4096×4096 FP16 的双 seed pilot、
 cold 12 studies / 216 attempts、目标 cold + warm 16 studies / 288 attempts，
 以及完整运行计时、参数/路径验证、恢复与归档检查；固定直接依赖版本不变。
 镜像内配置位于 `/opt/bo-kernel-tuner/runpod/configs/pilot.json`。
@@ -205,7 +206,7 @@ cold 12 studies / 216 attempts、目标 cold + warm 16 studies / 288 attempts，
 仅验证计划时，显式覆盖默认 CMD，不传 `--gpus`，不挂载真实结果目录：
 
 ```bash
-IMAGE='ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:079df18c23caee6769ee0b70570c5c12863d7e5d0f847e7fb7cec1fb4d1136c3'
+IMAGE='ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:f054f0edf82a8de9e2ff08589472dc91a399b5d89c469384dd0a6c988f9a1501'
 docker run --rm --network none --entrypoint /bin/bash "$IMAGE" \
   runpod/run.sh pilot --dry-run --output /tmp/3090-pilot
 docker run --rm --network none --entrypoint /bin/bash "$IMAGE" \
@@ -221,9 +222,15 @@ docker run --rm --network none --entrypoint /bin/bash "$IMAGE" \
 保留 `/workspace` 挂载和唯一 `BO_OUTPUT_DIR`，具体步骤见 [PILOT.md](PILOT.md)。
 默认 CMD 会启动实验，因此不要用省略 `--entrypoint` 的 `docker run` 替代上述 dry-run。
 
+### 历史 pilot 镜像（2026-10-30）
+
+[原发布记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41028932034)
+对应源码 `14118cbec5aba88654232b1a2f232be4ca35d1db`、digest `sha256:079df18c23caee6769ee0b70570c5c12863d7e5d0f847e7fb7cec1fb4d1136c3`，离线测试 106 项通过。
+该镜像包含 pilot，但不含 PR #9 的设备选择修复；保留它复现旧失败记录，新的实验使用上方镜像。
+
 ### 历史镜像（2026-10-28；不含 pilot）
 
-保留该镜像用于旧版复现；**新 pilot 请使用上面的 2026-10-30 digest**。
+保留该镜像用于旧版复现；**新实验请使用上面的 2026-11-05 digest**。
 不要将旧镜像的 `BO_SUITE` 改成 pilot。
 
 [手动发布与核验记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/40636599094)

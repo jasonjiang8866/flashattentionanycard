@@ -41,15 +41,16 @@ RMSNorm 不足以代表大空间中的 BO 收敛，仅作小空间对照。
 
 ## 先 dry-run，再由操作者启动
 
-在两台独立 Linux 主机上使用相同的镜像 digest（2026-10-30 已发布）：
+在两台独立 Linux 主机上使用相同的镜像 digest（2026-11-05 SGT 已发布）：
 
 ```text
-ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:079df18c23caee6769ee0b70570c5c12863d7e5d0f847e7fb7cec1fb4d1136c3
+ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:f054f0edf82a8de9e2ff08589472dc91a399b5d89c469384dd0a6c988f9a1501
 ```
 
-镜像源码和 revision label 均为 `14118cbec5aba88654232b1a2f232be4ca35d1db`；
-[发布证据](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41028932034) 与完整离线验证说明见 [README.md](README.md#当前-pilot-镜像2026-10-30)。
-旧 2026-10-28 digest 不含 pilot，继续保留用于旧版复现。
+镜像源码和 revision label 均为 `d53afd9aa6f3ce68ac896db0924558d1fe72ffe7`；
+[发布证据](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41934750064) 与完整离线验证说明见 [README.md](README.md#当前实验镜像2026-11-05)。
+本镜像包含 PR #9 的 GPU-test device-selection 修复，尚待真实 GPU 验收。
+旧 2026-10-30 和 2026-10-28 digest 仅供历史复现；后者不含 pilot。
 镜像内工作目录为 `/opt/bo-kernel-tuner`，配置为 `runpod/configs/pilot.json`。
 Docker 无 GPU dry-run 命令见 README；必须覆盖默认 CMD，避免自动启动真实实验。
 
@@ -58,7 +59,7 @@ Docker 无 GPU dry-run 命令见 README；必须覆盖默认 CMD，避免自动�
 ```bash
 git clone https://github.com/jasonjiang8866/flashattentionanycard.git
 cd flashattentionanycard
-git checkout --detach 14118cbec5aba88654232b1a2f232be4ca35d1db
+git checkout --detach d53afd9aa6f3ce68ac896db0924558d1fe72ffe7
 python -m runpod.launch pilot --dry-run --output /workspace/results/3090-pilot
 # 以下安装及真实 smoke 仅供后续由操作者在 GPU 主机上执行，本次未执行：
 # bash runpod/bootstrap.sh smoke --output /workspace/results/smoke-01
