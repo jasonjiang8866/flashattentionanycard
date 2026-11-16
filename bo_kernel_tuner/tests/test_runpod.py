@@ -2,15 +2,17 @@ import argparse
 import copy
 import json
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from bo_kernel_tuner.tests.test_confirmation import timing
 from bo_kernel_tuner.tuner import engine
 from runpod import launch
 
 
-def junit(path, child="", count=19):
+def junit(path, child="", count=25):
     path.write_text(
         "<testsuites><testsuite>"
         + "".join(
@@ -21,7 +23,7 @@ def junit(path, child="", count=19):
 
 
 @pytest.mark.parametrize(
-    "child,count", [("<skipped/>", 19), ("<failure/>", 19), ("<error/>", 19), ("", 0), ("", 18)]
+    "child,count", [("<skipped/>", 25), ("<failure/>", 25), ("<error/>", 25), ("", 0), ("", 24)]
 )
 def test_gpu_junit_cannot_pass_on_skips_or_incomplete_execution(tmp_path, child, count):
     path = tmp_path / "gpu-tests.xml"
@@ -33,7 +35,7 @@ def test_gpu_junit_cannot_pass_on_skips_or_incomplete_execution(tmp_path, child,
 def test_gpu_junit_complete(tmp_path):
     path = tmp_path / "gpu-tests.xml"
     junit(path)
-    assert launch.validate_junit(path) == 19
+    assert launch.validate_junit(path) == 25
 
 
 def test_suite_plans_and_cpu_dry_run(capsys, monkeypatch):
@@ -46,6 +48,14 @@ def test_suite_plans_and_cpu_dry_run(capsys, monkeypatch):
     assert launch.main(["performance", "--dry-run"]) == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["studies"] == 90 and plan["max_attempts"] == 3360
+
+
+def test_confirmation_work_is_visible_in_dry_run(capsys):
+    assert launch.main(["smoke", "--dry-run", "--confirm-repetitions", "6"]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["confirmation_workers"] == 108
+    assert plan["confirmation_worker_timeout_sum_s"] == 108 * 180
+    assert launch.main(["smoke", "--dry-run", "--confirm-repetitions", "2"]) == 1
 
 
 @pytest.mark.parametrize("mutation", ["path", "duplicate", "seed", "unknown", "nan"])
@@ -70,6 +80,7 @@ def test_bad_suite_config_rejected(tmp_path, mutation):
 @pytest.fixture
 def suite(tmp_path, hardware, monkeypatch):
     # Deliberate CPU test doubles, never exported as user GPU benchmark results.
+    hardware = replace(hardware, uuid="CPU-TEST-DOUBLE")
     config = launch.load_config("smoke")
     config["cases"] = [next(c for c in config["cases"] if c["id"] == "rmsnorm_fp16")]
     config["cases"][0]["trials"] = 1
@@ -89,12 +100,7 @@ def suite(tmp_path, hardware, monkeypatch):
 
     def search(*pos, **kwargs):
         calls.append(pos[6])
-        kwargs["evaluator"] = lambda p: {
-            "status": "ok",
-            "latency_ms": 1.0,
-            "samples_ms": [1.0] * 3,
-            "validation": [{"max_abs_error": 0.0}] * 2,
-        }
+        kwargs["evaluator"] = lambda p: timing()
         return real_search(*pos, **kwargs)
 
     monkeypatch.setattr(engine, "run_search", search)
@@ -106,7 +112,7 @@ def test_full_suite_artifacts_and_verified_resume(suite):
     launch.execute(args, config, output)
     status = json.loads((output / "status.json").read_text())
     assert status["gpu_validation_passed"] and status["completed_studies"] == 3
-    assert status["gpu_test_count"] == 19
+    assert status["gpu_test_count"] == 25
     timing_path = output.parent / f"{output.name}.timing.json"
     timing = json.loads(timing_path.read_text())
     assert len(timing["sessions"]) == 1
@@ -243,6 +249,62 @@ def test_worker_measurement_evidence_is_required(suite):
         launch.verify_study(directory, result["metadata"], require_receipt=False)
 
 
+def test_suite_confirmation_and_verified_resume(suite, monkeypatch):
+    from bo_kernel_tuner.tuner import confirmation as c
+    from bo_kernel_tuner.tuner.worker import BASELINES
+
+    args, config, output, _, _ = suite
+    args.confirm_repetitions = 3
+    hardware = launch.gpu_preflight(0)
+    monkeypatch.setattr(c.Hardware, "detect", lambda _: hardware)
+    calls = []
+
+    def worker(w, hw, params, measure, timeout, logs, number, *, order):
+        calls.append((logs, number))
+        return {
+            "status": "ok",
+            "data_seed": w.data_seed,
+            "order": order,
+            "hardware": hw.to_dict(),
+            "candidate": timing(),
+            "torch": timing(BASELINES[w.kernel], value=2),
+        }
+
+    monkeypatch.setattr(c, "isolated_evaluate", worker)
+    launch.execute(args, config, output)
+    assert json.loads((output / "status.json").read_text())["completed_confirmations"] == 3
+    assert len(calls) == 9
+    assert len((output / "baseline-summary.csv").read_text().splitlines()) == 4
+    args.resume = True
+    launch.execute(args, config, output)
+    assert len(calls) == 9
+    first = next((output / "confirmations").rglob("confirmation.json"))
+    broken = json.loads(first.read_text())
+    broken["pairs"].pop()
+    first.write_text(json.dumps(broken))
+    with pytest.raises(ValueError, match="completeness"):
+        launch.execute(args, config, output)
+    assert not json.loads((output / "status.json").read_text())["gpu_validation_passed"]
+
+
+def test_confirmation_failure_rejects_suite(suite, monkeypatch):
+    from bo_kernel_tuner.tuner import confirmation as c
+
+    args, config, output, _, _ = suite
+    args.confirm_repetitions = 3
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("test double baseline failed")
+
+    monkeypatch.setattr(c, "confirm", fail)
+    with pytest.raises(RuntimeError, match="baseline failed"):
+        launch.execute(args, config, output)
+    status = json.loads((output / "status.json").read_text())
+    assert status["completed_studies"] == 3
+    assert status["completed_confirmations"] == 0 and not status["gpu_validation_passed"]
+    assert not (output / "baseline-summary.csv").exists()
+
+
 def test_suite_transfer_remeasures_source_candidates(suite, monkeypatch):
     from dataclasses import replace
 
@@ -291,7 +353,7 @@ def test_gpu_checks_preserve_visibility(tmp_path, hardware, monkeypatch, visible
         junit(tmp_path / "gpu-tests.xml")
 
     monkeypatch.setattr(launch, "run_logged", command)
-    assert launch.gpu_tests(tmp_path, 2) == 19
+    assert launch.gpu_tests(tmp_path, 2) == 25
 
 
 @pytest.mark.parametrize("requested", [None, "0", "2"])

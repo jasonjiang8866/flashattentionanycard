@@ -4,7 +4,13 @@
 本项目位于 `flashattentionanycard` 仓库；当前实现 GEMM、Fused RMSNorm 和 MoE grouped GEMM。
 目标平台为 Linux + NVIDIA CUDA、compute capability 8.0 及以上，包括 Ampere 与 Blackwell。
 
-**验证状态：CPU 回归与离线代码生成可自动验证；真实 GPU 精度、吞吐和迁移收益必须在目标 GPU 上测量。仓库不包含虚构的 GPU benchmark 结果。**
+**M0 已通过真实 GPU smoke 验收：19 项测试、18 项 study、36 次尝试，Pod 独立清理确认完成。**
+[验收记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43743010737)运行于 PRO 6000 Blackwell MIG 24GB。
+这证明当时版本的执行链路；吞吐优势、迁移收益及新增 M1 代码仍需目标 GPU 实测。
+
+**M1 新增 PyTorch 基线与最佳配置独立复测入口**：GEMM、RMSNorm、MoE 使用同一计时协议，
+冻结搜索赢家后以新输入 seed、交替执行顺序进行配对复测，独立保存样本和可复验报告。
+使用方法、额外运行预算及验收条件见 [M1 测量协议](runpod/MEASUREMENT.md)。当前发布的 M0 镜像不包含 M1。
 
 ## RunPod 一键实验
 
@@ -212,13 +218,13 @@ python -m bo_kernel_tuner.analysis.plot_metrics \
 1. 每个候选在独立进程与空 Triton/CUDA 磁盘缓存中编译，重复候选也遵守相同规则。
 2. FP32 reference 禁用 TF32。FP16 使用 `rtol=0.01, atol=0.02`；BF16 使用 `rtol=0.02, atol=0.15`。
    两组随机输入、NaN 填充输出可检测漏写和非有限值，日志记录最大绝对误差。容差需结合真实 workload 再评估。
-3. 预热后捕获默认 32 次 launch 的 CUDA Graph；30 次 replay 分别用 CUDA events 计时并除以 batch。
+3. 在 side stream 预热后捕获默认 32 次 launch 的 CUDA Graph；30 次 replay 分别用 CUDA events 计时并除以 batch。
    objective 为中位数，保留全部 sample、MAD、最小/最大值。
 4. 计时排除 Python dispatch、输入生成、reference 和编译；端到端 search wall time 则包括这些成本、进程启动、Optuna 和检查点开销。
 5. 同一输入/输出 buffer 重用，属于 hot-buffer/cache 协议。小 RMSNorm 可能主要受 cache/launch 限制，不能把结果直接称为 DRAM 带宽。
 
-最佳配置的统计量存在 winner's curse。可将该 study 作为 `--warm-start`，以 `--top-k 1 --trials 1 --mode tune --method tpe`
-在新的输出目录重新测量；论文应进一步进行独立重复、不同输入及真实 shape 验证。
+最佳配置的搜索统计量存在 winner's curse。使用 [M1 独立复测](runpod/MEASUREMENT.md)冻结该配置后与 PyTorch 基线配对测量，
+分别报告搜索 best 和新输入上的复测值。重放样本不当作独立重复；论文仍应增加独立会话和真实 shape 验证。
 
 ## 建议实验矩阵
 

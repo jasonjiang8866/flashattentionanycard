@@ -18,7 +18,7 @@ import optuna
 
 from bo_kernel_tuner.configs.search_spaces import grid_size, validate_params
 from bo_kernel_tuner.tuner.hardware import prune_reason, resource_estimate
-from bo_kernel_tuner.tuner.worker import Measurement
+from bo_kernel_tuner.tuner.worker import MEASUREMENT_PROTOCOL, PRECISION_POLICY, Measurement
 
 
 class EvaluationFailure(RuntimeError):
@@ -77,7 +77,9 @@ def sampler_for(method, space, seed, startup_trials=10):
     raise ValueError("method must be grid, random, or tpe")
 
 
-def isolated_evaluate(workload, hardware, params, measurement, timeout, log_dir, number):
+def isolated_evaluate(
+    workload, hardware, params, measurement, timeout, log_dir, number, *, order=None
+):
     log_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="bo-kernel-") as directory:
         root = Path(directory)
@@ -89,6 +91,7 @@ def isolated_evaluate(workload, hardware, params, measurement, timeout, log_dir,
                     "device": hardware.device,
                     "params": params,
                     "measurement": asdict(measurement),
+                    "order": order,
                 }
             )
         )
@@ -224,7 +227,8 @@ def run_search(
         "heuristic_smem": heuristic_smem,
         "measurement": asdict(measurement),
         "transfer": transfer,
-        "protocol": "cold_compile_per_candidate;cuda_graph;hot_reused_buffers",
+        "protocol": "cold_compile_per_candidate;" + MEASUREMENT_PROTOCOL,
+        "precision_policy": PRECISION_POLICY,
         "code_fingerprint": code_fingerprint(),
         "environment": environment(),
     }

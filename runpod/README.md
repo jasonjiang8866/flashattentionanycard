@@ -1,6 +1,7 @@
 # RunPod 实验入口
 
-提供现成 Pod 的 bootstrap 和可构建的 Docker 环境。默认只运行 smoke；本仓库没有自动创建/租用 Pod，也没有将 CPU 检查标成真实 GPU 验证。
+提供现成 Pod 的 bootstrap 和可构建的 Docker 环境。默认只运行 smoke。
+受预算约束的手动 Actions 创建/清理入口见 [GPU_SMOKE.md](GPU_SMOKE.md)，M1 基线与独立复测见 [MEASUREMENT.md](MEASUREMENT.md)。
 
 ## 1. 最快入口：在现有 RunPod GPU Pod 中执行
 
@@ -20,7 +21,7 @@ bash runpod/bootstrap.sh smoke \
 这条命令会：
 
 1. 创建受脚本管理的独立 venv，安装 PyTorch **2.9.0+cu128**、Triton **3.5.0** 及固定版本的实验依赖。
-2. 检查 CUDA、设备属性与环境版本；在所选 GPU 上运行全部 19 项真实 GPU 测试，任何 skip/failure/error 都阻止继续。
+2. 检查 CUDA、设备属性与环境版本；当前源码在所选 GPU 上运行全部 25 项真实 GPU 测试（M0 镜像为 19 项），任何 skip/failure/error 都阻止继续。
 3. 对三个算子的 FP16/BF16 运行 Grid、Random、TPE 调优。
 4. 校验结果完整性，生成统计图、CSV、校验和及 `.tar.gz` 结果包。
 

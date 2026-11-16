@@ -1,6 +1,7 @@
 """RunPod suite orchestration; scientific results remain owned by the core engine."""
 
 import argparse
+import csv
 import fcntl
 import hashlib
 import json
@@ -26,6 +27,7 @@ from bo_kernel_tuner.configs.search_spaces import Workload, grid_size, search_sp
 from bo_kernel_tuner.tuner.worker import Measurement
 
 ROOT = Path(__file__).resolve().parents[1]
+GPU_TEST_MINIMUM = 25  # 18 kernel cases + timer + 6 paired baseline/graph cases
 
 
 def write_json(path, data):
@@ -114,7 +116,7 @@ def make_plan(config, with_transfer=False):
     return plan
 
 
-def describe_plan(config, output, source_run=None, top_k=5):
+def describe_plan(config, output, source_run=None, top_k=5, confirmation_repetitions=0):
     """CPU-only plan; candidate attempts include failures, pruning and duplicates."""
     plan = make_plan(config, source_run is not None)
     totals = {}
@@ -131,6 +133,9 @@ def describe_plan(config, output, source_run=None, top_k=5):
         )
         totals[item["label"]] = totals.get(item["label"], 0) + budget
     cap = sum(totals.values())
+    if confirmation_repetitions and confirmation_repetitions < 3:
+        raise ValueError("Confirmation requires at least three paired repetitions")
+    confirmation_workers = len(plan) * confirmation_repetitions
     return {
         "studies": len(plan),
         "max_attempts": cap,
@@ -139,6 +144,8 @@ def describe_plan(config, output, source_run=None, top_k=5):
         "archive": str(output.parent / f"{output.name}.tar.gz"),
         "timing": str(output.parent / f"{output.name}.timing.json"),
         "candidate_worker_timeout_sum_s": cap * config["trial_timeout"],
+        "confirmation_workers": confirmation_workers,
+        "confirmation_worker_timeout_sum_s": confirmation_workers * config["trial_timeout"],
         "time_limit_note": "Worker timeout sum only; excludes preflight, GPU tests, search/IO, "
         "analysis and archiving. Not a suite wall-time or billing cap.",
         "source_validation": "deferred until execution" if source_run is not None else None,
@@ -232,11 +239,11 @@ def run_logged(command, log_path, env=None, timeout=1200):
 def validate_junit(path):
     root = ET.parse(path).getroot()
     tests = list(root.iter("testcase"))
-    if len(tests) < 19 or any(
+    if len(tests) < GPU_TEST_MINIMUM or any(
         t.find(tag) is not None for t in tests for tag in ("failure", "error", "skipped")
     ):
         raise RuntimeError(
-            "GPU tests did not fully pass (need >=19 executed tests, zero skips/errors)"
+            f"GPU tests did not fully pass (need >={GPU_TEST_MINIMUM} executed tests, zero skips/errors)"
         )
     return len(tests)
 
@@ -401,6 +408,7 @@ def run_context(args, config):
         "python": sys.version,
         "source_revision": revision,
         "sources": sources,
+        "confirmation_repetitions": getattr(args, "confirm_repetitions", 0),
     }
     return hardware, candidates, env, manifest
 
@@ -456,6 +464,7 @@ def execute(args, config, output):
             "gpu_validation_passed": False,
             "gpu_tests_passed": False,
             "completed_studies": 0,
+            "completed_confirmations": 0,
         }
         write_json(output / "status.json", state)
         try:
@@ -512,6 +521,59 @@ def execute(args, config, output):
                 hashes = verify_study(destination, expected, require_receipt=False)
                 write_json(destination / "receipt.json", hashes)
                 state["completed_studies"] += 1
+            repetitions = getattr(args, "confirm_repetitions", 0)
+            if repetitions:
+                from bo_kernel_tuner.tuner.confirmation import confirm, verify_confirmation
+
+                rows = []
+                for item in plan:
+                    source = output / item["path"] / "result.json"
+                    destination = output / "confirmations" / item["path"]
+                    state["phase"] = "confirmations/" + item["path"]
+                    write_json(output / "status.json", state)
+                    if destination.exists():
+                        previous = destination / "confirmation.json"
+                        if (
+                            previous.exists()
+                            and json.loads(previous.read_text()).get("status") == "complete"
+                        ):
+                            verify_confirmation(destination)
+                            report = json.loads(previous.read_text())
+                            if (
+                                report["source_sha256"] != sha256(source)
+                                or report["repetitions"] != repetitions
+                            ):
+                                raise ValueError("Confirmation resume source/repetition mismatch")
+                        else:
+                            archived = (
+                                output
+                                / "incomplete"
+                                / uuid.uuid4().hex
+                                / "confirmations"
+                                / item["path"]
+                            )
+                            archived.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.move(str(destination), str(archived))
+                    if not destination.exists():
+                        report = confirm(
+                            source, destination, args.device, repetitions, config["trial_timeout"]
+                        )
+                    summary = verify_confirmation(destination)
+                    rows.append(
+                        {
+                            "case": item["case"]["id"],
+                            "method": item["label"],
+                            "seed": item["seed"],
+                            "baseline": report["baseline"],
+                            "search_best_ms": report["search_best_ms"],
+                            **{k: v for k, v in summary.items() if k != "paired_speedups"},
+                        }
+                    )
+                    state["completed_confirmations"] += 1
+                with (output / "baseline-summary.csv").open("w", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+                    writer.writeheader()
+                    writer.writerows(rows)
             state["phase"] = "analysis"
             write_json(output / "status.json", state)
             for case in config["cases"]:
@@ -586,6 +648,12 @@ def main(argv=None):
     parser.add_argument("--top-k", type=int, default=int(os.environ.get("BO_TOP_K", "5")))
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--confirm-repetitions",
+        type=int,
+        default=0,
+        help="Paired PyTorch baseline repetitions per winner (0 disables; >=3 enables)",
+    )
     args = parser.parse_args(argv)
     try:
         if args.device < 0 or args.top_k < 1 or args.source_seed < 0:
@@ -597,7 +665,9 @@ def main(argv=None):
             or Path(os.environ.get("BO_WORKSPACE", "/workspace/bo-kernel-tuner")) / "results" / name
         ).resolve()
         validate_output(output, args.source_run, args.resume)
-        plan = describe_plan(config, output, args.source_run, args.top_k)
+        if args.confirm_repetitions < 0:
+            raise ValueError("Confirmation repetitions must be nonnegative")
+        plan = describe_plan(config, output, args.source_run, args.top_k, args.confirm_repetitions)
         if args.dry_run:
             print(json.dumps(plan, indent=2))
             return 0
