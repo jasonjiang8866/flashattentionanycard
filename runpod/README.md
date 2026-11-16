@@ -1,7 +1,8 @@
 # RunPod 实验入口
 
 提供现成 Pod 的 bootstrap 和可构建的 Docker 环境。默认只运行 smoke。
-受预算约束的手动 Actions 创建/清理入口见 [GPU_SMOKE.md](GPU_SMOKE.md)，M1 基线与独立复测见 [MEASUREMENT.md](MEASUREMENT.md)。
+受预算约束的 M1 手动 Actions 创建/清理与验收入口见 [M1_ACCEPTANCE.md](M1_ACCEPTANCE.md)，
+历史 M0 记录见 [GPU_SMOKE.md](GPU_SMOKE.md)，测量协议见 [MEASUREMENT.md](MEASUREMENT.md)。
 
 ## 1. 最快入口：在现有 RunPod GPU Pod 中执行
 
@@ -49,7 +50,8 @@ bash runpod/run.sh performance --device 0 \
 | `performance` 加迁移 | 上述配置 + warm TPE | 5 | 120 | 4,480 |
 
 预算受控的 RTX 3090/5090 探索方案、dry-run、独立主机运行与迁移步骤见 [PILOT.md](PILOT.md)。
-2026-11-05 SGT 发布镜像包含 pilot、完整运行计时及 PR #9 的 GPU 测试设备选择修复，固定引用见下文。默认入口仍为 smoke。
+当前镜像包含 M1 基线、独立复测及原有 pilot，固定引用见下文。默认入口仍为 smoke，
+普通入口只有显式传入 `--confirm-repetitions 6` 才执行复测；付费验收入口固定开启。
 
 smoke 验证执行链路，不能证明 TPE 的收敛优势。performance 包含每个 GEMM/MoE study 50 attempts、RMSNorm 12 attempts；
 每次都独立启动进程并冷编译，完整实验可能耗时数小时，具体以 GPU、编译和测量时间为准。
@@ -178,36 +180,31 @@ gh run list --repo "$REPO" --workflow runpod.yml --event workflow_dispatch --lim
 随后核对远端 SHA 标签指向的 digest、按 digest 拉取并检查镜像 revision label。
 运行 Summary 与 `runpod-publication-<SHA>` artifact 保存实际标签、digest 和验证证据。
 
-### 当前实验镜像（2026-11-05）
+### 当前 M1 实验镜像
 
-[手动发布与核验记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41934750064) 使用已合并的 main 源码，
-`publish=true`、默认分支和完整 `expected_sha` 门禁均通过。发布前完成 `pip check`、
-smoke dry-run 和 **114 项完整离线测试（19 项 GPU 测试未选中）**；
-发布后核对远端 SHA 标签与 digest，并按 digest 拉取检查 revision label。
-离线 suite 包含 cold/warm pilot 的无 CUDA dry-run、预算、路径无写入、计时与恢复检查。
-这些检查不代表 CUDA 正确性、性能或实际 GPU warm-start 已通过。
+[发布与核验记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43898896512)
+在推送前完成 `pip check`、smoke dry-run 和 **156 项完整离线测试（25 项 GPU 测试未选中，无跳过）**，
+随后核对远端 digest、按 digest 拉取并检查 OCI revision label。真实 CUDA 验收仍待执行。
 
-- 源码 SHA / `org.opencontainers.image.revision`：`d53afd9aa6f3ce68ac896db0924558d1fe72ffe7`。
-- SHA 标签：`ghcr.io/jasonjiang8866/flashattentionanycard-runpod:sha-d53afd9aa6f3ce68ac896db0924558d1fe72ffe7`。
-- 不可变 digest：`sha256:f054f0edf82a8de9e2ff08589472dc91a399b5d89c469384dd0a6c988f9a1501`。
-- 发布证据：该次 Actions 的 `runpod-publication-d53afd9aa6f3ce68ac896db0924558d1fe72ffe7` artifact。
+- 源码 SHA / `org.opencontainers.image.revision`：`f979f1af25b5e9e4a3254ec2e195cf681c61e84d`。
+- SHA 标签：`ghcr.io/jasonjiang8866/flashattentionanycard-runpod:sha-f979f1af25b5e9e4a3254ec2e195cf681c61e84d`。
+- 不可变 digest：`sha256:972e5e3fbfbc80fde96cbfadfd117e5501fa81d6ce4899295dc8122af632f37d`。
+- 发布证据：该次 Actions 的 `runpod-publication-f979f1af25b5e9e4a3254ec2e195cf681c61e84d` artifact。
 
 RunPod **Container Image** 固定为：
 
 ```text
-ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:f054f0edf82a8de9e2ff08589472dc91a399b5d89c469384dd0a6c988f9a1501
+ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:972e5e3fbfbc80fde96cbfadfd117e5501fa81d6ce4899295dc8122af632f37d
 ```
 
-本版包含 PR #9 的 GPU 测试设备选择修复，真实 GPU 复验仍待完成；
-保留 GEMM 2048³ / RMSNorm 4096×4096 FP16 的双 seed pilot、
-cold 12 studies / 216 attempts、目标 cold + warm 16 studies / 288 attempts，
-以及完整运行计时、参数/路径验证、恢复与归档检查；固定直接依赖版本不变。
+M0 的旧镜像、19 项 GPU 测试及清理记录保留在 [GPU_SMOKE.md](GPU_SMOKE.md)。
+本版新增 PyTorch 基线及独立复测，保留原有 pilot；依赖版本不变。
 镜像内配置位于 `/opt/bo-kernel-tuner/runpod/configs/pilot.json`。
 
 仅验证计划时，显式覆盖默认 CMD，不传 `--gpus`，不挂载真实结果目录：
 
 ```bash
-IMAGE='ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:f054f0edf82a8de9e2ff08589472dc91a399b5d89c469384dd0a6c988f9a1501'
+IMAGE='ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:972e5e3fbfbc80fde96cbfadfd117e5501fa81d6ce4899295dc8122af632f37d'
 docker run --rm --network none --entrypoint /bin/bash "$IMAGE" \
   runpod/run.sh pilot --dry-run --output /tmp/3090-pilot
 docker run --rm --network none --entrypoint /bin/bash "$IMAGE" \

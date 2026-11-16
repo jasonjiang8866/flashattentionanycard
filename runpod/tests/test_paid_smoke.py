@@ -502,8 +502,8 @@ class ControllerTests(unittest.TestCase):
                 c.download("https://test.invalid/archive", "test-token", expected, "a" * 180001)
 
     def test_reconciled_retry_preserves_total_cap(self):
-        self.assertEqual(c.PRIOR_SPEND_RESERVE, 0.16)
-        self.assertGreater(c.PRIOR_SPEND_RESERVE, 0.10 + 0.0542205)
+        self.assertEqual(c.PRIOR_SPEND_RESERVE, 0.23)
+        self.assertGreater(c.PRIOR_SPEND_RESERVE, 0.16 + 0.061555832)
         for rate in (0.5, 0.69, 1.5):
             q = c.quote(rate)
             estimate = (
@@ -512,6 +512,68 @@ class ControllerTests(unittest.TestCase):
             )
             self.assertAlmostEqual(q["planned_total_usd"], estimate)
             self.assertLessEqual(estimate, 0.8)
+
+    def test_launch_rejects_search_only_or_partial_m1_and_always_cleans_up(self):
+        evidence = {
+            "gpu": c.MIG,
+            "regions": ["US-TEST-1"],
+            "cost": c.quote(0.69),
+            "config_sha256": "b" * 64,
+            "controller_sha": "a" * 40,
+        }
+        complete = {
+            "status": "accepted",
+            "source_sha": SOURCE,
+            "config_sha256": "b" * 64,
+            "controller_sha": "a" * 40,
+            "studies": 18,
+            "gpu_tests": 25,
+            "confirmations": 18,
+            "paired_workers": 108,
+        }
+        for key, value in (
+            ("confirmations", None),
+            ("confirmations", 17),
+            ("paired_workers", 107),
+            ("gpu_tests", 19),
+            (None, None),
+        ):
+            with self.subTest(key=key, value=value):
+                result = dict(complete)
+                if key:
+                    result[key] = value
+                detail = self.pod()
+                detail.update(gpu={"id": c.MIG}, dataCenterId="US-TEST-1", cost=0.69)
+                api = Mock()
+                api.call.side_effect = [{"id": "pod1"}, detail]
+                # The independent archive path is tested with complete synthetic
+                # artifacts in test_m1_verification; isolate controller admission here.
+                (self.out / "smoke.tar.gz").write_bytes(b"synthetic archive placeholder")
+                with (
+                    patch.object(c, "authorization_guard"),
+                    patch.object(c, "preflight", return_value=evidence),
+                    patch.object(c, "request", return_value=result),
+                    patch.object(c, "cleanup") as cleanup,
+                    patch("builtins.print"),
+                    patch(
+                        "runpod.verify_paid.verify_archive",
+                        return_value={
+                            "confirmations": 18,
+                            "paired_workers": 108,
+                        },
+                    ) as verify,
+                ):
+                    if key:
+                        with self.assertRaisesRegex(RuntimeError, "completeness mismatch"):
+                            c.launch(api)
+                        verify.assert_not_called()
+                        self.assertFalse((self.out / "acceptance.json").exists())
+                    else:
+                        c.launch(api)
+                        verify.assert_called_once_with(self.out / "smoke.tar.gz")
+                        accepted = json.loads((self.out / "acceptance.json").read_text())
+                        self.assertEqual(accepted["paired_workers"], 108)
+                    cleanup.assert_called_once_with(api)
 
     def test_only_exact_reconciled_marker_allows_retry(self):
         for marker_id, allowed in ((13204770313, True), (999, False), (None, False)):
@@ -541,6 +603,8 @@ class ControllerTests(unittest.TestCase):
             (41675121064, 999, False),
             (41686672779, 13254599148, True),
             (41686672779, 999, False),
+            (43743010737, 14173177303, True),
+            (43743010737, 999, False),
         ):
             with self.subTest(run=run, marker=marker):
                 previous = {"name": c.MARKER, "workflow_run": {"id": run}, "id": marker}

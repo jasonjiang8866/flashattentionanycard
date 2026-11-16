@@ -1,4 +1,9 @@
-# One-off $1 RunPod GPU smoke
+# RunPod GPU smoke: M0 evidence and historical launch specification
+
+The current M1 controller/image handoff and stricter confirmation gates are documented
+in [M1_ACCEPTANCE.md](M1_ACCEPTANCE.md). The M0 source/image, cost reserve and
+acceptance specification below are retained as historical evidence, not current
+M1 launch instructions.
 
 ## M0 accepted — 2026-11-16 SGT
 

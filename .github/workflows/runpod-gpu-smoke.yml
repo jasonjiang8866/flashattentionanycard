@@ -29,6 +29,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install CPU confirmation verifier dependency
+        if: inputs.confirm_paid_smoke
+        run: python -m pip install 'optuna==4.9.0'
       - name: Offline controller tests
         run: python -m unittest discover -s runpod/tests -v
       - name: Check paid admission before recording a new attempt

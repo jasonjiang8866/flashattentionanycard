@@ -11,6 +11,7 @@ from bo_kernel_tuner.configs.search_spaces import Workload, grid_size, search_sp
 from bo_kernel_tuner.tuner.worker import Measurement
 from runpod.launch import load_config, make_plan, validate_junit, verify_study
 from runpod.provider import SOURCE
+from runpod.verify_m1 import verify_confirmations
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -98,6 +99,7 @@ def verify_archive(archive):
                 "code_fingerprint": fingerprint.hexdigest(),
             }
             verify_study(output / item["path"], expected)
+        confirmation_counts = verify_confirmations(output, plan, manifest, state)
         for case in config["cases"]:
             folder = output / "figures" / case["id"]
             for name in (
@@ -110,3 +112,4 @@ def verify_archive(archive):
                 files = list(folder.rglob(name))
                 if not files or any(not p.stat().st_size for p in files):
                     raise RuntimeError("Missing report")
+        return confirmation_counts

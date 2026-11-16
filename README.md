@@ -10,7 +10,8 @@
 
 **M1 新增 PyTorch 基线与最佳配置独立复测入口**：GEMM、RMSNorm、MoE 使用同一计时协议，
 冻结搜索赢家后以新输入 seed、交替执行顺序进行配对复测，独立保存样本和可复验报告。
-使用方法、额外运行预算及验收条件见 [M1 测量协议](runpod/MEASUREMENT.md)。当前发布的 M0 镜像不包含 M1。
+使用方法、额外运行预算及验收条件见 [M1 测量协议](runpod/MEASUREMENT.md)。
+M1 镜像已发布，付费入口的固定版本、复测验收及费用记录见 [M1 验收衔接](runpod/M1_ACCEPTANCE.md)；真实 GPU 验收待执行。
 
 ## RunPod 一键实验
 

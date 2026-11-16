@@ -18,6 +18,20 @@ OUTPUT = Path("/tmp/faac-smoke")
 ARCHIVE = OUTPUT.with_suffix(".tar.gz")
 RESULT = {"status": "running"}
 TOKEN = ""
+CONFIRM_REPETITIONS = 6
+
+
+def suite_command():
+    return [
+        sys.executable,
+        "-m",
+        "runpod.launch",
+        "smoke",
+        "--output",
+        str(OUTPUT),
+        "--confirm-repetitions",
+        str(CONFIRM_REPETITIONS),
+    ]
 
 
 def digest(path):
@@ -83,7 +97,7 @@ def work():
         }
         with Path("/tmp/faac-suite.log").open("w") as log:
             child = subprocess.Popen(
-                [sys.executable, "-m", "runpod.launch", "smoke", "--output", str(OUTPUT)],
+                suite_command(),
                 cwd=ROOT,
                 env=environment,
                 stdout=log,
@@ -104,6 +118,7 @@ def work():
         if code:
             raise RuntimeError("suite_failed")
         sys.path.insert(0, str(ROOT))
+        from bo_kernel_tuner.tuner.confirmation import verify_confirmation
         from bo_kernel_tuner.tuner.hardware import Hardware
         from runpod.launch import (
             expected_metadata,
@@ -115,23 +130,36 @@ def work():
 
         manifest = json.loads((OUTPUT / "manifest.json").read_text())
         config = load_config("smoke")
-        if manifest["source_revision"] != source or manifest["config"] != config:
+        if (
+            manifest["source_revision"] != source
+            or manifest["config"] != config
+            or manifest.get("confirmation_repetitions") != CONFIRM_REPETITIONS
+        ):
             raise RuntimeError("manifest_mismatch")
         hardware = Hardware(**manifest["hardware"])
         plan = make_plan(config)
         for item in plan:
             verify_study(OUTPUT / item["path"], expected_metadata(item, config, hardware))
+            folder = OUTPUT / "confirmations" / item["path"]
+            summary = verify_confirmation(folder)
+            if (folder / "source-result.json").read_bytes() != (
+                OUTPUT / item["path"] / "result.json"
+            ).read_bytes() or summary["paired_repetitions"] != CONFIRM_REPETITIONS:
+                raise RuntimeError("confirmation_mismatch")
         tests = validate_junit(OUTPUT / "gpu-tests.xml")
         state = json.loads((OUTPUT / "status.json").read_text())
         if (
             state["status"] != "complete"
             or not state["gpu_validation_passed"]
             or state["completed_studies"] != len(plan)
+            or state.get("completed_confirmations") != len(plan)
         ):
             raise RuntimeError("incomplete_studies")
         result.update(
             status="accepted",
             studies=len(plan),
+            confirmations=len(plan),
+            paired_workers=len(plan) * CONFIRM_REPETITIONS,
             gpu_tests=tests,
             hardware=manifest["hardware"],
             versions=manifest["versions"],
@@ -153,7 +181,14 @@ def work():
             status = json.loads(status_file.read_text())
             result["suite_status"] = {
                 key: status[key]
-                for key in ("status", "phase", "error", "gpu_test_count", "completed_studies")
+                for key in (
+                    "status",
+                    "phase",
+                    "error",
+                    "gpu_test_count",
+                    "completed_studies",
+                    "completed_confirmations",
+                )
                 if key in status
             }
         timing = OUTPUT.with_suffix(".timing.json")

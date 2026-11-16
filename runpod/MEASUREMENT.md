@@ -53,10 +53,10 @@ Search-best latency remains a separate field; confirmation does not reselect a w
 
 ## Run in an already prepared GPU environment
 
-The currently published `f054f0ed...` image contains M0, **not these M1 changes**. M1 needs
-a newly built and verified image from the reviewed M1 commit (or the matching source
-environment). The paid controller's old source/image equality guard intentionally rejects
-changed workload code; this PR does not change its pins, authorization or spending ledger.
+The [M1 image publication](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43898896512)
+contains this protocol at `f979f1af25b5e9e4a3254ec2e195cf681c61e84d`.
+See [M1_ACCEPTANCE.md](M1_ACCEPTANCE.md) for the controller/image handoff, fixed
+six-pair acceptance and cost ledger. Publication is offline validation, not real GPU acceptance.
 
 ```bash
 # CPU-only plan: preserves the 18-study / 36-attempt smoke design and adds 108 pair workers.
