@@ -29,6 +29,9 @@ This handoff does not itself prove real CUDA execution or performance improvemen
 The injected worker enables M1 confirmations explicitly. Search-only launch defaults
 remain unchanged. A newly published workload image contains the M1 kernels, tests
 and confirmation code; controller-only changes are injected or run on Actions.
+PR image validation reads the existing build cache without exporting another copy;
+publication continues to refresh the cache. This avoids the observed PR cache-upload
+stall while preserving image builds and all offline tests.
 The paid Actions job installs `optuna==4.9.0` for CPU artifact verification before
 any resource admission. No dependencies are installed inside a paid Pod.
 
