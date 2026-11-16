@@ -43,7 +43,7 @@ MIN_CUDA_BY_GPU = {
 GPUS = tuple(MIN_CUDA_BY_GPU)
 OWNER = "FAAC_MANAGED_BY"
 AUTHORIZATION = "faac-20261103-usd1"
-# M0 continuation window; the original 2026-11-10 cutoff is retained in GPU_SMOKE.md.
+# M1 continuation window; the original 2026-11-10 cutoff is retained in GPU_SMOKE.md.
 # Same ID, total cap and reconciled ledger; never extend past artifact retention.
 AUTHORIZATION_EXPIRES = 1795392000  # 2026-11-23 00:00 UTC
 DISK_GB = 40
@@ -65,13 +65,18 @@ MARKER = "runpod-authorization-" + AUTHORIZATION
 # Run 41686672779: MIG allocated, 19 GPU tests skipped; Pod hrv09j5hib0tgt
 # deleted and recovery 41687375001 verified absence. Reserve $0.06 more for
 # the full 280.470026 s intent-to-recovery interval ($0.0542205 including disk).
+# M0 run 43743010737 accepted; recovery 43743491986 verified absence.
+# Full intent-to-independent-absence interval: 318.414016 s, $0.061555832
+# incremental GPU+disk. Round $0.16 + this estimate up to $0.23; not an invoice.
+# Result artifact 14173576818 / recovery 14173507312 hashes in GPU_SMOKE.md.
 RECONCILED_MARKERS = {
     "41577245210": 13204770313,
     "41668287039": 13245909643,
     "41675121064": 13249184469,
     "41686672779": 13254599148,
+    "43743010737": 14173177303,
 }
-PRIOR_SPEND_RESERVE = 0.16
+PRIOR_SPEND_RESERVE = 0.23
 
 
 def save(name, value):
@@ -146,6 +151,7 @@ def provenance():
         "image_source_sha": SOURCE,
         "image": IMAGE,
         "suite": "smoke",
+        "confirmation_repetitions": 6,
         "config_sha256": hashlib.sha256(
             (ROOT / "runpod/configs/smoke.json").read_bytes()
         ).hexdigest(),
@@ -526,14 +532,19 @@ def launch(api):
                     or result.get("config_sha256") != evidence["config_sha256"]
                     or result.get("controller_sha") != evidence["controller_sha"]
                     or result.get("studies") != 18
-                    or result.get("gpu_tests", 0) < 19
+                    or result.get("gpu_tests", 0) < 25
+                    or result.get("confirmations") != 18
+                    or result.get("paired_workers") != 108
                     or not (OUT / "smoke.tar.gz").is_file()
                 ):
                     raise RuntimeError("Result provenance/completeness mismatch")
                 from runpod.verify_paid import verify_archive
 
-                verify_archive(OUT / "smoke.tar.gz")
-                save("acceptance.json", {"status": "accepted", "archive_verified": True})
+                confirmation_counts = verify_archive(OUT / "smoke.tar.gz")
+                save(
+                    "acceptance.json",
+                    {"status": "accepted", "archive_verified": True, **confirmation_counts},
+                )
                 return
             time.sleep(10)
         raise RuntimeError("Deadline reached without complete artifacts")
