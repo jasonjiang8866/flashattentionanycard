@@ -1,5 +1,7 @@
 # bo-kernel-tuner
 
+**简体中文** | [English](README.en.md)
+
 基于 **Optuna multivariate TPE + Triton** 的硬件感知 GPU 算子调优与跨架构迁移实验框架。
 本项目位于 `flashattentionanycard` 仓库；当前实现 GEMM、Fused RMSNorm 和 MoE grouped GEMM。
 目标平台为 Linux + NVIDIA CUDA、compute capability 8.0 及以上，包括 Ampere 与 Blackwell。
