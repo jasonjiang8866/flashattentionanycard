@@ -1,36 +1,35 @@
 # bo-kernel-tuner
 
-**简体中文** | [English](README.en.md)
+**English** | [Simplified Chinese](README.zh-CN.md)
 
-基于 **Optuna multivariate TPE + Triton** 的硬件感知 GPU 算子调优与跨架构迁移实验框架。
-本项目位于 `flashattentionanycard` 仓库；当前实现 GEMM、Fused RMSNorm 和 MoE grouped GEMM。
-目标平台为 Linux + NVIDIA CUDA、compute capability 8.0 及以上，包括 Ampere 与 Blackwell。
+A hardware-aware GPU kernel tuning and cross-architecture transfer experiment framework built on **Optuna multivariate TPE + Triton**.
+Hosted in the `flashattentionanycard` repository, the project currently implements GEMM, Fused RMSNorm, and MoE grouped GEMM.
+It targets Linux + NVIDIA CUDA with compute capability 8.0 or newer, including Ampere and Blackwell.
 
-**M0 已通过真实 GPU smoke 验收：19 项测试、18 项 study、36 次尝试，Pod 独立清理确认完成。**
-[验收记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43743010737)运行于 PRO 6000 Blackwell MIG 24GB。
-这证明当时版本的执行链路；吞吐优势、迁移收益及新增 M1 代码仍需目标 GPU 实测。
+**M0 passed a real-GPU smoke acceptance run: 19 tests, 18 studies, and 36 attempts, with Pod cleanup independently confirmed.**
+The [acceptance run](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43743010737) used a PRO 6000 Blackwell MIG 24GB.
+This validates the execution pipeline for that revision; throughput advantages, transfer benefits, and the new M1 code still require measurements on the target GPUs.
 
-**M1 新增 PyTorch 基线与最佳配置独立复测入口**：GEMM、RMSNorm、MoE 使用同一计时协议，
-冻结搜索赢家后以新输入 seed、交替执行顺序进行配对复测，独立保存样本和可复验报告。
-使用方法、额外运行预算及验收条件见 [M1 测量协议](runpod/MEASUREMENT.md)。
-M1 镜像已发布，付费入口的固定版本、复测验收及费用记录见 [M1 验收衔接](runpod/M1_ACCEPTANCE.md)；真实 GPU 验收待执行。
+**M1 adds PyTorch baselines and independent confirmation of the best configuration**: GEMM, RMSNorm, and MoE share one timing protocol.
+After freezing the search winner, paired confirmation uses new input seeds and alternating execution order, saving samples and reproducible reports separately.
+See the [M1 measurement protocol](runpod/MEASUREMENT.md) for usage, additional runtime budgets, and acceptance criteria. The M1 image has been published. The [M1 acceptance guide](runpod/M1_ACCEPTANCE.md) documents the pinned image, GPU acceptance criteria, and cost records.
 
-## RunPod 一键实验
+## One-command RunPod experiments
 
-已提供 [RunPod 脚本、固定依赖 Dockerfile 和完整操作说明](runpod/README.md)。
-在 RunPod GPU Pod 中检出 `main` 后执行：
+[RunPod scripts, a Dockerfile with pinned dependencies, and full operating instructions](runpod/README.md) are available.
+After checking out `main` in a RunPod GPU Pod, run:
 
 ```bash
 bash runpod/bootstrap.sh smoke --output /workspace/bo-kernel-tuner/results/smoke-01
 ```
 
-默认验证全部 GPU 测试，并完成三个算子的 FP16/BF16 小规模对照、出图和结果打包。
-`performance`、跨 GPU warm-start 及经过产物校验的 study 级恢复见上述文档。
+By default, this runs all GPU tests, small FP16/BF16 comparisons for all three kernels, plot generation, and result packaging.
+See the linked documentation for `performance`, cross-GPU warm-start, and study-level recovery with artifact validation.
 
-## 安装
+## Installation
 
-使用独立 Python 3.10+ 环境。安装与驱动兼容、包含目标 GPU 架构的 PyTorch CUDA wheel，再安装本项目。
-建议两台机器使用相同 Python、PyTorch、Triton、Optuna 版本，并保存完整环境。
+Use a dedicated Python 3.10+ environment. Install a PyTorch CUDA wheel that supports both your driver and target GPU architecture, then install this project.
+Use the same Python, PyTorch, Triton, and Optuna versions on both machines, and record the complete environment.
 
 ```bash
 git clone https://github.com/jasonjiang8866/flashattentionanycard.git
@@ -44,10 +43,10 @@ python -m pip freeze > environment-lock.txt
 python -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_name(0))'
 ```
 
-开发依赖范围见 `pyproject.toml`。初始离线代码生成测试固定 Triton 3.5.0；CPU CI 覆盖 Optuna 4.5.0/4.9.0。
-这些是验证基线，不代表任意驱动/软件组合已通过 GPU 验证。
+See `pyproject.toml` for development dependency ranges. Initial offline code-generation tests pin Triton 3.5.0; CPU CI covers Optuna 4.5.0/4.9.0.
+These are validation baselines, not evidence that every driver/software combination has passed GPU validation.
 
-## 目录
+## Repository layout
 
 ```text
 bo_kernel_tuner/
@@ -72,34 +71,34 @@ bo_kernel_tuner/
 └── run_benchmark.py
 ```
 
-`worker.py` 隔离 CUDA context。单个候选的编译错误、OOM、精度失败、进程崩溃或超时不会作为成功测量写入数据库，也不会污染后续 trial。
+`worker.py` isolates the CUDA context. A candidate's compilation error, OOM, correctness failure, process crash, or timeout is never recorded as a successful measurement and does not contaminate later trials.
 
-## 快速验证
+## Quick validation
 
 ```bash
-# 不加载 CUDA，不生成性能数据：
+# No CUDA loading and no performance data:
 python -m bo_kernel_tuner.run_benchmark --dry-run --kernel gemm
 
-# CPU 回归；不安装 GPU 依赖也可单独执行：
+# CPU regression tests; these can also run without installing GPU dependencies:
 python -m pytest -q -m 'not gpu and not compile'
 
-# Triton 离线编译到 sm80/sm86/sm120；不执行 kernel：
+# Compile Triton offline for sm80/sm86/sm120 without executing kernels:
 python -m pytest -q bo_kernel_tuner/tests/test_compile.py
 
-# 在 GPU 机器上执行真实数值/计时检查：
+# Run real numerical and timing checks on a GPU machine:
 python -m pytest -q -m gpu
 
-# 小型端到端冒烟：三个搜索器、同一空间、同一 attempt 预算。
+# Small end-to-end smoke test: three search methods, one space, one attempt budget.
 python -m bo_kernel_tuner.run_benchmark \
   --kernel gemm --device 0 --profile smoke --mode compare \
   --m 127 --n 193 --k 257 --seeds 0 --trials 4 --startup-trials 2 \
   --output results/smoke-gemm
 ```
 
-GPU correctness 测试覆盖 FP16/BF16、非 tile 整数倍、单元素、空 expert、不均匀 expert 和多种 launch 配置。
-每个正式 trial 也必须先通过默认两组输入 seed 的 FP32 reference 校验，才允许进入计时。
+GPU correctness tests cover FP16/BF16, dimensions that are not multiples of tile sizes, single elements, empty experts, uneven expert workloads, and multiple launch configurations.
+Every benchmark trial must also pass FP32 reference checks with two input seeds by default before timing is allowed.
 
-## 同一 GPU 上比较搜索器
+## Compare search methods on one GPU
 
 ```bash
 python -m bo_kernel_tuner.run_benchmark \
@@ -118,49 +117,49 @@ python -m bo_kernel_tuner.run_benchmark \
   --seeds 0,1,2,3,4 --output results/ampere-moe
 ```
 
-`--mode tune --method grid|random|tpe` 运行单个搜索器。
-`--time-budget 600` 增加每个 study 的端到端秒数预算；`--trial-timeout 180` 限制每个子进程。
-数据库提交与终止清理可能使实际总耗时略超预算，实际耗时会完整记录。
+`--mode tune --method grid|random|tpe` runs a single search method.
+`--time-budget 600` adds an end-to-end budget in seconds for each study; `--trial-timeout 180` limits each subprocess.
+Database commits and termination cleanup may slightly exceed the budget; actual elapsed time is recorded in full.
 
-每个 study 使用单个 GPU、`n_jobs=1`。每个 seed 内搜索器顺序随机化，以减轻固定执行顺序引起的温度漂移；
-同时运行其他 GPU 工作仍会干扰测量，应在独占、稳定的环境下实验。
+Each study uses one GPU with `n_jobs=1`. Search-method order is randomized within each seed to reduce thermal drift caused by a fixed execution order.
+Other concurrent GPU work still interferes with measurements, so use an exclusive, stable environment.
 
-### 搜索空间和公平性
+### Search spaces and fairness
 
-| 算子 | 可调参数 | full 空间 |
+| Kernel | Tunable parameters | Full space |
 |---|---|---:|
-| GEMM | BLOCK_M/N/K、GROUP_M、num_warps、num_stages | 432 |
-| RMSNorm | ROWS_PER_CTA、num_warps | 12 |
-| MoE grouped GEMM | BLOCK_M/N/K、CTA_MULTIPLIER、num_warps、num_stages | 432 |
+| GEMM | BLOCK_M/N/K, GROUP_M, num_warps, num_stages | 432 |
+| RMSNorm | ROWS_PER_CTA, num_warps | 12 |
+| MoE grouped GEMM | BLOCK_M/N/K, CTA_MULTIPLIER, num_warps, num_stages | 432 |
 
-三种方法使用**完全相同的 categorical domain**。GridSampler 以 seed 随机排列笛卡尔积，避免词典序偏差；
-随机搜索有放回采样，TPE 也允许重复，重复配置会重新测量并标记。
-有效 attempt 预算统一为 `min(--trials, grid_size)`，避免 Grid 已穷尽后让其他方法继续使用更多预算。
-失败和静态剪枝同样消耗 attempt。小于完整空间的 Grid 实验属于预算受限的网格前缀；不能称为穷尽基准。
+All three methods use **exactly the same categorical domains**. GridSampler shuffles the Cartesian product using the seed to avoid lexicographic bias.
+Random search samples with replacement, and TPE also permits duplicates; repeated configurations are remeasured and flagged.
+The effective attempt budget is uniformly `min(--trials, grid_size)`, preventing other methods from spending more attempts after Grid exhausts the space.
+Failures and static pruning also consume attempts. Grid experiments below the full-space budget are budget-limited grid prefixes, not exhaustive baselines.
 
-TPE 显式启用 `multivariate=True`。`--startup-trials` 是开始拟合前的随机探索数量；
-小空间使用较小 startup 数。RMSNorm 的 12 点空间是有意保留的负对照：网格搜索可能更合适，不能预设 BO 胜出。
+TPE explicitly enables `multivariate=True`. `--startup-trials` sets the number of random exploration trials before model fitting begins;
+use a smaller startup count for small spaces. RMSNorm's 12-point space is an intentional negative control: grid search may be more suitable, and BO must not be assumed to win.
 
-硬件感知来自设备属性读取、合法性检查、资源估算与以 SM 数量决定 MoE CTA 数量。
-它不是以架构特征为输入的跨设备 surrogate model。TPE 仍为每个 GPU 独立建立模型。
+Hardware awareness comes from reading device properties, checking legality, estimating resources, and using the SM count to determine the number of MoE CTAs.
+This is not a cross-device surrogate model that takes architecture features as inputs. TPE still builds a separate model for each GPU.
 
-### 资源约束
+### Resource constraints
 
-- 自动读取 GPU 名称、UUID、compute capability、SM 数、显存、每 block shared memory 和线程限制。
-- 默认只剪掉明确非法线程配置和 RMSNorm 实现上限。
-- shared-memory 公式是 pipeline 的**近似值**，不会默认作为硬约束误删合法配置。
-  `--heuristic-smem` 显式开启启发式剪枝，需独立做消融实验。
-- 真正的资源可行性由 Triton 编译器和 CUDA launch 判断；成功配置记录编译后的 shared memory、registers 和 spills。
-- 没有可靠静态公式能完全预测寄存器占用、编译器布局与 occupancy，代码不会伪造这些上界。
+- Automatically reads the GPU name, UUID, compute capability, SM count, VRAM, per-block shared memory, and thread limits.
+- By default, prunes only clearly illegal thread configurations and configurations exceeding the RMSNorm implementation's limits.
+- The shared-memory formula is a **pipeline approximation** and is not a hard constraint by default, avoiding accidental removal of legal configurations.
+  `--heuristic-smem` explicitly enables heuristic pruning, which requires a separate ablation study.
+- Actual resource feasibility is determined by the Triton compiler and CUDA launch; successful configurations record compiled shared memory, registers, and spills.
+- No reliable static formula fully predicts register usage, compiler layouts, and occupancy; the code does not fabricate such bounds.
 
-## 3090 → 5090 的 warm-start
+## Warm-start from a 3090 to a 5090
 
-两台设备无需在同一主机。复制源端 `result.json` 即可，目标端必须使用相同代码、搜索空间和 workload（含 dtype、shape、expert 分布及 data seed）。
-GPU 编号是当前进程中、经过 `CUDA_VISIBLE_DEVICES` 映射后的逻辑编号。
+The two devices do not need to be in the same host. Copy the source `result.json`; the target must use the same code, search space, and workload, including dtype, shape, expert distribution, and data seed.
+GPU indices are logical indices within the current process, after mapping through `CUDA_VISIBLE_DEVICES`.
 
 ```bash
-# 在 3090 上运行前面的 bf16 GEMM 比较，得到 ampere-gemm/tpe-seed-0/result.json。
-# 在 5090 上，使用同一代码版本并复制该文件：
+# Run the bf16 GEMM comparison above on the 3090 to produce ampere-gemm/tpe-seed-0/result.json.
+# On the 5090, use the same code revision and copy that file:
 python -m bo_kernel_tuner.run_benchmark \
   --kernel gemm --dtype bf16 --device 0 --mode compare \
   --m 2048 --n 2048 --k 2048 --trials 100 --seeds 0,1,2,3,4 \
@@ -168,19 +167,19 @@ python -m bo_kernel_tuner.run_benchmark \
   --output results/blackwell-gemm-transfer
 ```
 
-目标端会比较 Grid、Random、冷启动 TPE、warm-start TPE。
-迁移模块对源 GPU 完成且数值合法的 trial 按 latency 排序，去重并检查目标 GPU 的静态约束，再 `enqueue_trial`。
-**不通过 `add_trial` 导入源 GPU 的目标值。** 排队参数在目标 GPU 上重新编译、校验和计时，并计入目标预算。
-源文件 SHA-256、源/目标硬件和候选数量会写入 provenance。
+The target compares Grid, Random, cold-start TPE, and warm-start TPE.
+The transfer module ranks completed, numerically valid source-GPU trials by latency, deduplicates them, checks the target GPU's static constraints, and then calls `enqueue_trial`.
+**Source-GPU objective values are not imported through `add_trial`.** Queued parameters are recompiled, validated, and timed on the target GPU, counting toward its budget.
+The source file's SHA-256, source/target hardware, and candidate counts are recorded in provenance.
 
-这是参数排名先验/初始化迁移，并不是把源端 TPE posterior 原样搬到目标 GPU。
-初始 warm trial 也参与目标端 TPE 的后续训练。若 warm 数少于 startup 数，会继续随机探索直到达到 startup 阈值。
+This transfers a parameter-ranking prior/initialization, not the source TPE posterior unchanged to the target GPU.
+Initial warm trials also train the target TPE model. If there are fewer warm trials than startup trials, random exploration continues until the startup threshold is reached.
 
-为避免只挑一个幸运源 seed，正式实验应预先固定源 study，或对源 seed 分别重复整组迁移。
-warm-start 曲线默认只统计目标端开销；源 GPU 搜索成本需要单列，计算 amortized savings 时也要计入。
-反向 5090 → 3090 迁移应独立执行，以检验迁移的不对称性。
+To avoid selecting a single lucky source seed, formal experiments should fix the source study in advance or repeat the full transfer experiment for each source seed.
+Warm-start curves count only target-side costs by default; source-GPU search cost must be reported separately and included when computing amortized savings.
+Run the reverse 5090 → 3090 transfer independently to test transfer asymmetry.
 
-## 结果、图表和统计
+## Results, plots, and statistics
 
 ```bash
 python -m bo_kernel_tuner.analysis.plot_metrics \
@@ -188,67 +187,67 @@ python -m bo_kernel_tuner.analysis.plot_metrics \
   --output results/figures --target-factor 1.05
 ```
 
-每个 study 输出：
+Each study writes:
 
-| 文件 | 内容 |
+| File | Contents |
 |---|---|
-| `study.sqlite3` | Optuna trial 状态、参数、measurement 和实验 metadata |
-| `result.json` | 原子替换的实验快照、最佳有效配置和全部 attempted trials |
-| `trials.csv` | 便于 pandas/R 读取的逐 trial 表 |
-| `logs/trial-N.log` | 隔离 worker 的编译、CUDA 或精度失败日志 |
+| `study.sqlite3` | Optuna trial states, parameters, measurements, and experiment metadata |
+| `result.json` | Atomically replaced experiment snapshot, best valid configuration, and all attempted trials |
+| `trials.csv` | Per-trial table for pandas/R |
+| `logs/trial-N.log` | Compilation, CUDA, or correctness failure logs from the isolated worker |
 
-结果目录拒绝覆盖。每个 trial 后保存快照；被中断的实验标记 `interrupted`，当前版本不提供自动 resume。
-全部候选失败时没有 best，CLI 返回非零状态，不会生成“成功”的调优结果。
+Existing result directories cannot be overwritten. A snapshot is saved after every trial; interrupted experiments are marked `interrupted`, and the current version does not automatically resume them.
+If every candidate fails, there is no best configuration and the CLI returns a nonzero status instead of producing a "successful" tuning result.
 
-分析模块按硬件、workload、代码、依赖版本、测量协议、预算和剪枝选项划分 cohort。
-不同 GPU 的收敛曲线不会混合聚合。相同 cohort 内要求各方法 seed 集一致且不重复。
+The analysis module groups results into cohorts by hardware, workload, code, dependency versions, measurement protocol, budget, and pruning options.
+Convergence curves from different GPUs are never aggregated together. Within a cohort, all methods must have matching, nonduplicate seed sets.
 
-- `convergence.pdf/png`：按 attempt 和端到端时间绘制 best-so-far，中位数及跨 seed IQR。
-  使用共同观测区间；在所有 seed 都有有效 incumbent 前不画聚合值，避免只保留成功 seed 的偏差。
-- `tuning_time.pdf/png`：总调优时间与每个 seed 的观测点。
-- `summary.csv`：成功/失败/剪枝/唯一配置计数、最佳耗时、到达目标的 attempt 与秒数。
-- `paired_comparisons.csv`：配对 seed 的 baseline/candidate 比值，大于 1 表示 candidate 更快；
-  至少 3 对时输出固定随机种子的 5,000 次 bootstrap percentile 95% CI。
-  任一配对未达到目标则不计算该指标的比值，保留 hit rate 与缺失值，避免删掉失败样本后夸大加速。
-- `parameter_shift.pdf/png`：不同硬件/seed 的最佳参数热力图，颜色表示候选序号归一化值，数字表示真实参数。
-  它是参数偏移的描述图，不把离散候选间距离解释成物理距离。
+- `convergence.pdf/png`: best-so-far curves by attempt and end-to-end time, with medians and cross-seed IQR.
+  Uses a common observation interval; aggregates are withheld until every seed has a valid incumbent, avoiding bias from retaining only successful seeds.
+- `tuning_time.pdf/png`: total tuning time and observations for each seed.
+- `summary.csv`: counts of successful/failed/pruned/unique configurations, best latency, and attempts and seconds to reach the target.
+- `paired_comparisons.csv`: baseline/candidate ratios for paired seeds; values above 1 mean the candidate is faster.
+  With at least 3 pairs, reports a 95% bootstrap percentile CI from 5,000 resamples using a fixed random seed.
+  If either run in a pair misses the target, that metric's ratio is not computed; hit rates and missing values are retained to avoid overstating speedups by dropping failures.
+- `parameter_shift.pdf/png`: heatmap of best parameters across hardware/seeds; colors encode normalized candidate indices, while numbers show actual parameter values.
+  This describes parameter shifts without interpreting distances between discrete candidates as physical distances.
 
-目标阈值默认是 cohort 中**已观察到的最优 latency × 1.05**，不是已知全局最优。
-未到达目标的 run 作为右删失样本保留。以上 CI 与阈值比较用于探索性分析；论文中的确认性结论应使用预先定义的目标与独立重复实验。
+The default target threshold is the **best observed latency in the cohort × 1.05**, not a known global optimum.
+Runs that miss the target are retained as right-censored observations. These CIs and threshold comparisons support exploratory analysis; confirmatory claims in a paper should use predefined targets and independent repeated experiments.
 
-### 测量协议
+### Measurement protocol
 
-1. 每个候选在独立进程与空 Triton/CUDA 磁盘缓存中编译，重复候选也遵守相同规则。
-2. FP32 reference 禁用 TF32。FP16 使用 `rtol=0.01, atol=0.02`；BF16 使用 `rtol=0.02, atol=0.15`。
-   两组随机输入、NaN 填充输出可检测漏写和非有限值，日志记录最大绝对误差。容差需结合真实 workload 再评估。
-3. 在 side stream 预热后捕获默认 32 次 launch 的 CUDA Graph；30 次 replay 分别用 CUDA events 计时并除以 batch。
-   objective 为中位数，保留全部 sample、MAD、最小/最大值。
-4. 计时排除 Python dispatch、输入生成、reference 和编译；端到端 search wall time 则包括这些成本、进程启动、Optuna 和检查点开销。
-5. 同一输入/输出 buffer 重用，属于 hot-buffer/cache 协议。小 RMSNorm 可能主要受 cache/launch 限制，不能把结果直接称为 DRAM 带宽。
+1. Every candidate is compiled in a separate process with empty Triton/CUDA disk caches; repeated candidates follow the same rules.
+2. The FP32 reference disables TF32. FP16 uses `rtol=0.01, atol=0.02`; BF16 uses `rtol=0.02, atol=0.15`.
+   Two random inputs and NaN-filled outputs help detect unwritten elements and nonfinite values; logs record the maximum absolute error. Tolerances should be reassessed for real workloads.
+3. After warmup on a side stream, a CUDA Graph captures 32 launches by default; 30 replays are individually timed with CUDA events and divided by the batch size.
+   The objective is the median; all samples, MAD, minimum, and maximum are retained.
+4. Timing excludes Python dispatch, input generation, reference computation, and compilation. End-to-end search wall time includes these costs, process startup, Optuna, and checkpoint overhead.
+5. Input/output buffers are reused, making this a hot-buffer/cache protocol. Small RMSNorm workloads may be cache/launch limited, so their results cannot be directly described as DRAM bandwidth.
 
-最佳配置的搜索统计量存在 winner's curse。使用 [M1 独立复测](runpod/MEASUREMENT.md)冻结该配置后与 PyTorch 基线配对测量，
-分别报告搜索 best 和新输入上的复测值。重放样本不当作独立重复；论文仍应增加独立会话和真实 shape 验证。
+The search statistic for the best configuration is subject to the winner's curse. Use [M1 independent confirmation](runpod/MEASUREMENT.md) to freeze that configuration and measure it against the PyTorch baseline in paired runs,
+reporting the search best and confirmation values on new inputs separately. Replay samples are not independent experimental repeats; papers should also validate with independent sessions and real workload shapes.
 
-## 建议实验矩阵
+## Suggested experiment matrix
 
-| 维度 | 初始设置 |
+| Dimension | Initial settings |
 |---|---|
-| 架构 | RTX 3090 / Ampere，RTX 5090 / Blackwell，记录真实硬件 metadata |
-| dtype | FP16、BF16 分开分析 |
-| GEMM | `(1024,1024,1024)`、`(2048,2048,2048)`、`(127,193,257)`、瘦长矩阵 |
-| RMSNorm | rows 4096，hidden 1024/4096/8192，另测非 2 次幂 hidden |
-| MoE | balanced、skewed、包含空 expert 的相同总 token 数 workload |
-| search seed | 至少 5 个，正式结论建议增加独立重复 |
-| 预算 | GEMM/MoE 25/50/100；RMSNorm 最多 12；另做同 wall-time 预算实验 |
-| transfer | cold、top-1/5/10 warm，两个方向分别测试 |
-| 消融 | 默认硬约束 vs 启发式 shared-memory 剪枝 |
+| Architecture | RTX 3090 / Ampere, RTX 5090 / Blackwell; record actual hardware metadata |
+| dtype | Analyze FP16 and BF16 separately |
+| GEMM | `(1024,1024,1024)`, `(2048,2048,2048)`, `(127,193,257)`, and tall/skinny matrices |
+| RMSNorm | 4096 rows, hidden sizes 1024/4096/8192, plus non-power-of-two hidden sizes |
+| MoE | Balanced, skewed, and empty-expert workloads with the same total token count |
+| Search seeds | At least 5; add independent repeats for formal conclusions |
+| Budget | GEMM/MoE: 25/50/100; RMSNorm: at most 12; also run equal-wall-time-budget experiments |
+| Transfer | Cold, top-1/5/10 warm; test both directions separately |
+| Ablation | Default hard constraints vs. heuristic shared-memory pruning |
 
-不应预设 TPE 更快。报告失败率、负迁移和无显著收益的 workload；只在完整网格全部测量后，才能讨论该离散空间内的经验最优值。
+Do not assume TPE is faster. Report failure rates, negative transfer, and workloads with no significant benefit; only after measuring the complete grid can you discuss the empirical optimum within that discrete space.
 
-当前内核未覆盖 FlashAttention、backward、FP8、AMD/Intel、非 contiguous layout、MoE routing/scatter 和 Blackwell 专用 TMA/warp-specialization。
-这里只比较搜索方法找到此实现最佳配置的效率，不宣称超过 cuBLAS 或厂商最优算子。
+Current kernels do not cover FlashAttention, backward, FP8, AMD/Intel, noncontiguous layouts, MoE routing/scatter, or Blackwell-specific TMA/warp-specialization.
+The project compares how efficiently search methods find the best configuration of these implementations; it does not claim to outperform cuBLAS or vendor-optimized kernels.
 
-## 参考
+## References
 
 - [Optuna TPESampler](https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.TPESampler.html)
 - [Optuna GridSampler](https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.GridSampler.html)
