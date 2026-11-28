@@ -132,8 +132,8 @@ class Runpod:
             path = base + "?" + urllib.parse.urlencode({"cursor": cursor})
 
 
-def budget(api, reserve=1):
-    if not finite(reserve, 0.01):
+def budget(api, reserve=1, *, horizon_hours=1):
+    if not finite(reserve, 0.01) or not finite(horizon_hours, 0.001):
         raise ValueError("Invalid budget reserve")
     now = datetime.now(timezone.utc)
     result = request(
@@ -161,10 +161,11 @@ def budget(api, reserve=1):
     amounts = [c.get("amount") for c in charges if isinstance(c, dict)]
     if len(amounts) != len(charges) or not all(finite(x, -math.inf) for x in amounts):
         raise RuntimeError("Invalid billing history")
-    if balance < reserve or sum(abs(x) for x in amounts) + spend + reserve > 500:
+    if balance < reserve or sum(abs(x) for x in amounts) + spend * horizon_hours + reserve > 500:
         raise RuntimeError("Insufficient experiment reserve or $500 monthly budget headroom")
     return {
         "reserve_usd": reserve,
+        "horizon_hours": horizon_hours,
         "monthly_budget_usd": 500,
         "balance_sufficient": True,
         "month_headroom_sufficient": True,

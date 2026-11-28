@@ -15,7 +15,7 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: runpod-faac-usd1
+  group: runpod-faac-paid
   cancel-in-progress: false
 jobs:
   smoke:

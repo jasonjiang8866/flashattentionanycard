@@ -134,7 +134,7 @@ class ControllerTests(unittest.TestCase):
                 payload = api.call.call_args.args[2]
                 self.assertEqual(payload["gpu"]["id"], selected)
                 self.assertEqual(payload["gpu"]["minCudaVersion"], minimum)
-                cleanup.assert_called_once_with(api)
+                cleanup.assert_called_once_with(api, suite="smoke")
 
     def test_failed_preflight_does_not_expose_provider_error_text(self):
         api = Mock()
@@ -302,7 +302,7 @@ class ControllerTests(unittest.TestCase):
         self.assertNotIn("RUNPOD_API_KEY", payload["env"])
         self.assertNotIn("GH_TOKEN", payload["env"])
         self.assertNotIn("FAAC_RESULT_TOKEN", (self.out / "provision.json").read_text())
-        cleanup.assert_called_once_with(api)
+        cleanup.assert_called_once_with(api, suite="smoke")
 
     def test_create_http_error_has_sanitized_artifact_before_cleanup(self):
         api = Mock()
@@ -315,7 +315,7 @@ class ControllerTests(unittest.TestCase):
             "controller_sha": "a" * 40,
         }
 
-        def check_cleanup(_):
+        def check_cleanup(_, *, suite):
             result = json.loads((self.out / "create-error.json").read_text())
             self.assertEqual(result["http_status"], 400)
             self.assertEqual(result["categories"], ["capacity"])
@@ -577,10 +577,12 @@ class ControllerTests(unittest.TestCase):
                         self.assertFalse((self.out / "acceptance.json").exists())
                     else:
                         c.launch(api)
-                        verify.assert_called_once_with(self.out / "smoke.tar.gz")
+                        verify.assert_called_once_with(
+                            self.out / "smoke.tar.gz", suite="smoke", expected_gpu=c.MIG
+                        )
                         accepted = json.loads((self.out / "acceptance.json").read_text())
                         self.assertEqual(accepted["paired_workers"], 108)
-                    cleanup.assert_called_once_with(api)
+                    cleanup.assert_called_once_with(api, suite="smoke")
 
     def test_only_exact_reconciled_marker_allows_retry(self):
         for marker_id, allowed in ((13204770313, True), (999, False), (None, False)):

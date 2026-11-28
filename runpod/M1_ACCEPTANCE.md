@@ -158,6 +158,10 @@ the accepted 18-study smoke; it is not a paid pilot launcher.
 
 ## Next development slice
 
+Update 2026-11-28 SGT: the [single-GPU pilot controller and acceptance verifier](PILOT_ACCEPTANCE.md)
+now implement steps 2–3 below under the new US$10 / 500-minute allowance. Step 1 was merged
+in PR #15. Pilot GPU execution and the cross-GPU comparison remain pending.
+
 | Order | Deliverable | Acceptance gate |
 |---|---|---|
 | 1 | Close M1: bilingual progress, evidence, exact marker and $0.41 reserve | Reverify the downloaded archive; exact-marker, budget and expired-window regression tests pass |

@@ -8,7 +8,7 @@
 
 ## 项目进度
 
-更新于 **2026-11-27（新加坡时间）**。**M1 已于 2026-11-17（新加坡时间）通过真实 GPU smoke 验收**：
+更新于 **2026-11-28（新加坡时间）**。**M1 已于 2026-11-17（新加坡时间）通过真实 GPU smoke 验收**：
 25 项 GPU 测试通过、零跳过，18 项搜索 study 完成；18 个冻结后的最佳配置各完成 6 次独立的
 candidate/PyTorch 配对复测，共 **108 个配对 worker**。
 
@@ -16,11 +16,13 @@ candidate/PyTorch 配对复测，共 **108 个配对 worker**。
 |---|---|---|
 | M0：执行链路 | PRO 6000 Blackwell MIG 24GB 验收通过；19 项 GPU 测试、18 项 study、36 次尝试 | [M0 运行](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43743010737) |
 | M1：PyTorch 基线与独立复测 | 同型号 GPU 验收通过；下载产物及原始样本推导的统计已独立复验 | [M1 运行](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43917307722)、[独立清理](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43920030853) |
-| 下一阶段：大 shape 与跨 GPU pilot | 已规划；尚无 pilot 性能或迁移结果 | [Pilot 协议](runpod/PILOT.md)、[开发顺序与验收条件](runpod/M1_ACCEPTANCE.md#next-development-slice) |
+| 下一阶段：大 shape pilot | 单卡预算控制器与独立验收器已实现；GPU pilot 尚未运行 | [受控 pilot 验收](runpod/PILOT_ACCEPTANCE.md)、[Pilot 协议](runpod/PILOT.md) |
 
 M1 临时 Pod 已删除，并经独立流程确认不存在。本次 GPU 与临时磁盘费用保守估算 **$0.18**，
 累计预留估算更新为 **$0.41**；两者均非供应商账单。控制器原执行窗口已于
-**2026-11-23 08:00（新加坡时间）**到期；台账对账不延长执行授权。
+**2026-11-23 08:00（新加坡时间）**到期。新单卡 pilot 已获 **US$10 / 500 分钟**额度，
+首轮最多工作 120 分钟、清理 10 分钟，优先 4090；未对账的尝试会阻止再次启动。
+[新执行窗口、费用口径与验收条件](runpod/PILOT_ACCEPTANCE.md)单独记录。
 
 本次只覆盖单设备、单会话的小型合成 workload，尚不能证明跨卡可移植性、TPE 优势、迁移收益或生产规模加速。
 GEMM FP16 在本次 smoke 中慢于 PyTorch 基线；包括退步结果在内的全部 case 均保留于

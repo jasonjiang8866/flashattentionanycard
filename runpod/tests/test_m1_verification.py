@@ -35,14 +35,14 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def timing(implementation, dtype, value):
+def timing(implementation, dtype, value, repeats=7):
     rtol, atol = (0.01, 0.02) if dtype == "fp16" else (0.02, 0.15)
     return {
         "status": "ok",
         "implementation": implementation,
         "protocol": MEASUREMENT_PROTOCOL,
         "precision_policy": PRECISION_POLICY,
-        **sample_statistics([value] * 7),
+        **sample_statistics([value] * repeats),
         "validation": [{"max_abs_error": 0.0, "rtol": rtol, "atol": atol}] * 2,
     }
 
@@ -58,6 +58,12 @@ class WorkerCommandTests(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec("optuna"), "M1 verification requires Optuna")
 class ArchiveTests(unittest.TestCase):
+    suite = "smoke"
+    hardware_name = "SYNTHETIC-CPU-TEST-ONLY"
+
+    def verify(self, archive, **kwargs):
+        return verify_archive(archive, suite=self.suite, **kwargs)
+
     def setUp(self):
         from bo_kernel_tuner.tuner import confirmation as confirmation
         from bo_kernel_tuner.tuner.engine import code_fingerprint
@@ -65,11 +71,11 @@ class ArchiveTests(unittest.TestCase):
         self.c = confirmation
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.output = Path(self.tmp.name) / "faac-smoke"
+        self.output = Path(self.tmp.name) / ("faac-" + self.suite)
         self.output.mkdir()
-        self.config = load_config("smoke")
+        self.config = load_config(self.suite)
         self.plan = make_plan(self.config)
-        hardware = {"uuid": "SYNTHETIC-CPU-TEST-ONLY", "device": 0}
+        hardware = {"uuid": "SYNTHETIC-CPU-TEST-ONLY", "device": 0, "name": self.hardware_name}
         versions = {"torch": "2.9.0+cu128", "triton": "3.5.0"}
         manifest = {
             "source_revision": SOURCE,
@@ -89,8 +95,8 @@ class ArchiveTests(unittest.TestCase):
                 "status": "complete",
                 "gpu_validation_passed": True,
                 "gpu_tests_passed": True,
-                "completed_studies": 18,
-                "completed_confirmations": 18,
+                "completed_studies": len(self.plan),
+                "completed_confirmations": len(self.plan),
             },
         )
         (self.output / "gpu-tests.xml").write_text(
@@ -99,22 +105,23 @@ class ArchiveTests(unittest.TestCase):
         rows = []
         for item in self.plan:
             w = Workload(**item["case"]["workload"])
-            space = search_space(w.kernel, "smoke")
+            space = search_space(w.kernel, item["case"]["profile"])
             measurement = Measurement(**self.config["measurement"])
             best = {
                 "number": 0,
                 "state": "COMPLETE",
                 "value": 1.0,
                 "params": next(grid_configs(space)),
-                "attrs": {"measurement": timing("triton", w.dtype, 1.0)},
+                "attrs": {"measurement": timing("triton", w.dtype, 1.0, measurement.repeats)},
             }
+            attempts = item["case"]["trials"] if self.suite == "pilot" else 1
             source = {
                 "schema_version": 1,
                 "status": "complete",
                 "best": best,
-                "trials": [best],
-                "attempts": 1,
-                "successful_evaluations": 1,
+                "trials": [{**copy.deepcopy(best), "number": i} for i in range(attempts)],
+                "attempts": attempts,
+                "successful_evaluations": attempts,
                 "metadata": {
                     "workload": w.signature(),
                     "hardware": hardware,
@@ -122,7 +129,7 @@ class ArchiveTests(unittest.TestCase):
                     "measurement": asdict(measurement),
                     "method": item["label"],
                     "seed": item["seed"],
-                    "budget": 2,
+                    "budget": item["case"]["trials"],
                     "code_fingerprint": code_fingerprint(),
                     "environment": {"versions": versions},
                     "precision_policy": PRECISION_POLICY,
@@ -147,8 +154,8 @@ class ArchiveTests(unittest.TestCase):
                     "order": p["order"],
                     "data_seed": p["data_seed"],
                     "hardware": hardware,
-                    "candidate": timing("triton", w.dtype, 2.0),
-                    "torch": timing(BASELINES[w.kernel], w.dtype, 4.0),
+                    "candidate": timing("triton", w.dtype, 2.0, measurement.repeats),
+                    "torch": timing(BASELINES[w.kernel], w.dtype, 4.0, measurement.repeats),
                 }
                 for p in planned
             ]
@@ -223,7 +230,8 @@ class ArchiveTests(unittest.TestCase):
 
     def test_full_m1_archive_is_recomputed_without_cuda(self):
         self.assertEqual(
-            verify_archive(self.archive()), {"confirmations": 18, "paired_workers": 108}
+            self.verify(self.archive()),
+            {"confirmations": len(self.plan), "paired_workers": len(self.plan) * 6},
         )
 
     def test_incomplete_counts_are_rejected(self):
@@ -238,14 +246,14 @@ class ArchiveTests(unittest.TestCase):
                 data[key] = value
                 write(path, data)
                 with self.assertRaisesRegex(RuntimeError, "confirmations"):
-                    verify_archive(self.archive())
+                    self.verify(self.archive())
                 path.write_bytes(original)
 
     def test_missing_confirmation_is_rejected(self):
         path = self.output / "confirmations" / self.plan[0]["path"] / "confirmation.json"
         path.unlink()
         with self.assertRaisesRegex(RuntimeError, "confirmation set"):
-            verify_archive(self.archive())
+            self.verify(self.archive())
 
     def test_source_cannot_be_substituted_by_another_valid_search(self):
         folder = self.output / "confirmations" / self.plan[0]["path"]
@@ -253,7 +261,7 @@ class ArchiveTests(unittest.TestCase):
         for name in (*self.c.FILES, "receipt.json"):
             (folder / name).write_bytes((other / name).read_bytes())
         with self.assertRaisesRegex(RuntimeError, "bound to its accepted search"):
-            verify_archive(self.archive())
+            self.verify(self.archive())
 
     def test_rehashed_invalid_pair_and_summary_rejected(self):
         folder = self.output / "confirmations" / self.plan[0]["path"]
@@ -270,7 +278,7 @@ class ArchiveTests(unittest.TestCase):
                 write(folder / "confirmation.json", report)
                 self.receipt(folder)
                 with self.assertRaises(ValueError):
-                    verify_archive(self.archive())
+                    self.verify(self.archive())
 
     def test_valid_three_pair_confirmation_cannot_pass_six_pair_gate(self):
         folder = self.output / "confirmations" / self.plan[0]["path"]
@@ -281,7 +289,7 @@ class ArchiveTests(unittest.TestCase):
         (folder / "pairs.csv").write_text(self.c.pairs_csv(report["pairs"]))
         self.receipt(folder)
         with self.assertRaisesRegex(RuntimeError, "repetition count"):
-            verify_archive(self.archive())
+            self.verify(self.archive())
 
     def test_csv_cannot_publish_different_or_duplicate_results(self):
         path = self.output / "baseline-summary.csv"
@@ -290,7 +298,7 @@ class ArchiveTests(unittest.TestCase):
             with self.subTest(text=text[:30]):
                 path.write_text(text)
                 with self.assertRaisesRegex(RuntimeError, "Baseline summary"):
-                    verify_archive(self.archive())
+                    self.verify(self.archive())
 
 
 if __name__ == "__main__":

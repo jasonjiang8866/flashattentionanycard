@@ -8,7 +8,7 @@ It targets Linux + NVIDIA CUDA with compute capability 8.0 or newer, including A
 
 ## Project progress
 
-Updated **2026-11-27 (SGT)**. **M1 passed real-GPU smoke acceptance on 2026-11-17 (SGT)**:
+Updated **2026-11-28 (SGT)**. **M1 passed real-GPU smoke acceptance on 2026-11-17 (SGT)**:
 25 GPU tests passed with zero skips, 18 search studies completed, and all 18 frozen winners
 completed six independent candidate/PyTorch pairs each (**108 paired workers**).
 
@@ -16,12 +16,15 @@ completed six independent candidate/PyTorch pairs each (**108 paired workers**).
 |---|---|---|
 | M0: execution pipeline | Accepted on PRO 6000 Blackwell MIG 24GB; 19 GPU tests, 18 studies, 36 attempts | [M0 run](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43743010737) |
 | M1: PyTorch baselines and independent confirmation | Accepted on the same GPU model; downloaded archive and sample-derived summaries independently verified | [M1 run](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43917307722), [independent cleanup](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43920030853) |
-| Next: larger-shape and cross-GPU pilot | Planned; no pilot performance or transfer result yet | [Pilot protocol](runpod/PILOT.md), [development sequence and gates](runpod/M1_ACCEPTANCE.md#next-development-slice) |
+| Next: larger-shape pilot | Single-GPU budget controller and independent verifier implemented; GPU pilot not run | [Bounded pilot acceptance](runpod/PILOT_ACCEPTANCE.md), [pilot protocol](runpod/PILOT.md) |
 
 The M1 temporary Pod was deleted and independently confirmed absent. Its conservative
 incremental GPU + temporary-disk estimate is **$0.18**, bringing the cumulative reserved
 estimate to **$0.41**; these are estimates, not provider invoices. The controller's existing
-execution window expired on **2026-11-23 08:00 SGT**; ledger reconciliation does not renew it.
+smoke execution window expired on **2026-11-23 08:00 SGT**. The separately scoped pilot now has
+a **US$10 / 500-minute** allowance, with a first-attempt limit of 120 minutes work + 10 minutes
+cleanup, a 4090 preference, and a retained marker that blocks unreconciled retries. See its
+[launch window, budget accounting and acceptance gates](runpod/PILOT_ACCEPTANCE.md).
 
 This acceptance covers small synthetic workloads on one device/session. It does not establish
 cross-GPU portability, TPE superiority, transfer benefits, or production-scale speedups.

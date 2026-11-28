@@ -7,7 +7,8 @@
 **最新进度（2026-11-27 SGT）：M1 已于 2026-11-17 SGT 在 PRO 6000 Blackwell MIG 24GB 验收通过。**
 25 项 GPU 测试零跳过，18 项 study 和 108 个配对 worker 的产物已独立复验；临时 Pod 独立清理确认完成。
 累计费用预留估算为 $0.41，原执行窗口已于 2026-11-23 08:00 SGT 到期。
-下一步是准备有独立预算与验收条件的大 shape pilot；现有 smoke 控制器不能直接启动 pilot。
+[单卡大 shape pilot](PILOT_ACCEPTANCE.md)的预算控制、独立验收及手动工作流已实现；
+使用新的 US$10 / 500 分钟授权，首轮最多 120 分钟工作 + 10 分钟清理；尚未运行 GPU pilot。
 
 ## 1. 最快入口：在现有 RunPod GPU Pod 中执行
 
