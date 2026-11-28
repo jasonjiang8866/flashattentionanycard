@@ -225,6 +225,7 @@ class PilotControllerTests(unittest.TestCase):
         c.save("provision.json", {"name": c.AUTHORIZATION + "-1234", "run_id": "1234"})
         with self.assertRaisesRegex(RuntimeError, "does not belong"):
             c.cleanup(api, suite="pilot")
+        self.assertEqual(json.loads((self.out / "cleanup.json").read_text())["status"], "unknown")
         api.call.assert_not_called()
 
     def test_worker_selects_pilot_and_redacts_progress(self):

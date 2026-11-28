@@ -367,6 +367,8 @@ def cleanup(api, *, suite="smoke"):
     limits = policy(suite)
     path = OUT / "provision.json"
     run = identity()
+    # Invalidate earlier success even if the local intent is corrupt or foreign.
+    save("cleanup.json", {"status": "unknown", "name": limits.authorization + "-" + run})
     state = (
         json.loads(path.read_text())
         if path.exists()
@@ -374,8 +376,6 @@ def cleanup(api, *, suite="smoke"):
     )
     if state["run_id"] != run or state["name"] != limits.authorization + "-" + run:
         raise RuntimeError("Cleanup state does not belong to this run/authorization")
-    # Invalidate any earlier success before querying inventory again.
-    save("cleanup.json", {"status": "unknown", "name": state["name"]})
     absent_checks = 0
     # Reconcile by exact name even if POST returned an unknown outcome.
     for attempt in range(8):
