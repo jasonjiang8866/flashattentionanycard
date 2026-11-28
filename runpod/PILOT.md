@@ -7,8 +7,8 @@
 2026-11-27 SGT 更新：M1 已在 PRO 6000 Blackwell MIG 24GB 通过小型 smoke，
 25 项 GPU 测试、18 项 study、108 个配对 worker 及独立清理均已验证，见
 [M1 验收记录](M1_ACCEPTANCE.md)。这不是本 pilot 的验收，也不代表 3090/5090 已通过。
-后续 pilot 显式开启 `--confirm-repetitions 6`；受预算约束的 pilot 控制器尚待开发，
-现有付费 smoke 工作流不能直接用于本计划，且原授权窗口已过期。
+后续 pilot 显式开启 `--confirm-repetitions 6`；[单卡 pilot 预算控制器与独立验收器](PILOT_ACCEPTANCE.md)已实现，
+采用新的 US$10 / 500 分钟授权和独立手动工作流；GPU pilot 尚未执行。旧 smoke 窗口仍过期。
 
 ## 固定协议与候选预算
 

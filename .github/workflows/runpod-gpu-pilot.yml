@@ -1,0 +1,79 @@
+name: RunPod single-GPU pilot ($10 / 500 minutes)
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_paid_pilot:
+        description: 'One bounded pilot within US$10 / 500 min; launch window ends 2026-12-05 00:00 UTC'
+        type: boolean
+        required: true
+        default: false
+      expected_sha:
+        description: 'Full current main SHA; required for a paid run'
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: runpod-faac-paid
+  cancel-in-progress: false
+jobs:
+  pilot:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 160
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CPU confirmation verifier dependency
+        if: inputs.confirm_paid_pilot
+        run: python -m pip install 'optuna==4.9.0'
+      - name: Offline controller tests
+        run: python -m unittest discover -s runpod/tests -v
+      - name: Check paid admission before recording a new attempt
+        if: inputs.confirm_paid_pilot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONFIRM_PAID: ${{ inputs.confirm_paid_pilot }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: python -m runpod.paid_smoke authorize --suite pilot
+      - name: Live read-only preflight
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: python -m runpod.paid_smoke preflight --suite pilot
+      - name: Consume one-off authorization before any create request
+        if: inputs.confirm_paid_pilot && github.run_attempt == 1
+        run: |
+          mkdir -p runpod-authorization
+          printf '%s\n' "$GITHUB_RUN_ID" > runpod-authorization/run-id.txt
+      - uses: actions/upload-artifact@v4
+        if: inputs.confirm_paid_pilot && github.run_attempt == 1
+        with:
+          name: runpod-authorization-faac-pilot-20261128-usd10-500m
+          path: runpod-authorization/
+          retention-days: 90
+          if-no-files-found: error
+      - name: Create, monitor, retrieve, verify and delete one GPU Pod
+        if: inputs.confirm_paid_pilot
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          CONFIRM_PAID: ${{ inputs.confirm_paid_pilot }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: python -m runpod.paid_smoke run --suite pilot
+      - name: Independently verify owned Pod cleanup
+        if: always() && inputs.confirm_paid_pilot
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: python -m runpod.paid_smoke cleanup --suite pilot
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runpod-gpu-pilot-${{ github.run_id }}-${{ github.run_attempt }}
+          path: runpod-results/
+          retention-days: 30
+          if-no-files-found: warn

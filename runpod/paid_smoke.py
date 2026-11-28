@@ -1,4 +1,4 @@
-"""One authorized $1 experiment; only this Actions controller has account credentials."""
+"""Bounded smoke/pilot execution; only the Actions controller has account credentials."""
 
 import argparse
 import base64
@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from runpod.paid_policy import PILOT, PaidPolicy
 from runpod.provider import (
     IMAGE,
     MIG,
@@ -85,6 +86,43 @@ RECONCILED_MARKERS = {
 PRIOR_SPEND_RESERVE = 0.41
 
 
+def policy(suite="smoke"):
+    if suite == "pilot":
+        return PILOT
+    if suite != "smoke":
+        raise ValueError("Unsupported paid suite")
+    return PaidPolicy(
+        suite="smoke",
+        authorization=AUTHORIZATION,
+        expires=AUTHORIZATION_EXPIRES,
+        approved_usd=1,
+        prior_usd=PRIOR_SPEND_RESERVE,
+        unallocated_usd=0.20,
+        total_seconds=MAX_WORK_SECONDS + CLEANUP_SECONDS,
+        prior_seconds=0,
+        max_work_seconds=MAX_WORK_SECONDS,
+        cleanup_seconds=CLEANUP_SECONDS,
+        transfer_seconds=90,
+        min_work_seconds=300,
+        reconciled_markers=tuple(RECONCILED_MARKERS.items()),
+    )
+
+
+def workload_plan(suite):
+    from runpod.launch import load_config, make_plan
+
+    policy(suite)  # Only the two reviewed configurations, never an arbitrary path.
+    config = load_config(suite)
+    plan = make_plan(config)
+    return {
+        "suite": suite,
+        "studies": len(plan),
+        "search_attempts": sum(item["case"]["trials"] for item in plan),
+        "confirmations": len(plan),
+        "paired_workers": len(plan) * 6,
+    }
+
+
 def save(name, value):
     OUT.mkdir(exist_ok=True)
     temporary = OUT / (name + ".tmp")
@@ -101,26 +139,36 @@ def identity():
     return run
 
 
-def quote(rate):
+def quote(rate, *, suite="smoke"):
+    limits = policy(suite)
     if not finite(rate, 0.001) or rate > MAX_RATE:
         raise ValueError("GPU rate missing or above $1.50/hour")
     hourly = rate + DISK_HOURLY
     work = min(
-        MAX_WORK_SECONDS, math.floor((0.80 - PRIOR_SPEND_RESERVE) / hourly * 3600) - CLEANUP_SECONDS
+        limits.max_work_seconds,
+        limits.total_seconds - limits.prior_seconds - limits.cleanup_seconds,
+        math.floor(
+            (limits.approved_usd - limits.unallocated_usd - limits.prior_usd) / hourly * 3600
+        )
+        - limits.cleanup_seconds,
     )
-    if work < 300:
+    if work < limits.min_work_seconds:
         raise ValueError("Insufficient useful runtime within budget")
     return {
         "gpu_hourly_usd": rate,
         "disk_hourly_usd": DISK_HOURLY,
         "work_seconds": work,
-        "cleanup_seconds": CLEANUP_SECONDS,
-        "planned_total_usd": PRIOR_SPEND_RESERVE + hourly * (work + CLEANUP_SECONDS) / 3600,
-        "prior_spend_reserve_usd": PRIOR_SPEND_RESERVE,
-        "approved_usd": 1,
-        "unallocated_reserve_usd": 1
-        - PRIOR_SPEND_RESERVE
-        - hourly * (work + CLEANUP_SECONDS) / 3600,
+        "cleanup_seconds": limits.cleanup_seconds,
+        "transfer_seconds": limits.transfer_seconds,
+        "approved_seconds": limits.total_seconds,
+        "prior_seconds": limits.prior_seconds,
+        "planned_total_seconds": limits.prior_seconds + work + limits.cleanup_seconds,
+        "planned_total_usd": limits.prior_usd + hourly * (work + limits.cleanup_seconds) / 3600,
+        "prior_spend_reserve_usd": limits.prior_usd,
+        "approved_usd": limits.approved_usd,
+        "unallocated_reserve_usd": limits.approved_usd
+        - limits.prior_usd
+        - hourly * (work + limits.cleanup_seconds) / 3600,
         "transfer_usd": 0,
         "storage_gb": DISK_GB,
         "pricing_source": "https://docs.runpod.io/pods/pricing",
@@ -132,7 +180,8 @@ def git(*args):
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
 
 
-def provenance():
+def provenance(*, suite="smoke"):
+    policy(suite)
     head = git("rev-parse", "HEAD")
     if not re.fullmatch(r"[a-f0-9]{40}", head):
         raise RuntimeError("Invalid source revision")
@@ -156,18 +205,19 @@ def provenance():
         "controller_sha": head,
         "image_source_sha": SOURCE,
         "image": IMAGE,
-        "suite": "smoke",
+        "suite": suite,
         "confirmation_repetitions": 6,
         "config_sha256": hashlib.sha256(
-            (ROOT / "runpod/configs/smoke.json").read_bytes()
+            (ROOT / f"runpod/configs/{suite}.json").read_bytes()
         ).hexdigest(),
         "worker_sha256": hashlib.sha256((ROOT / "runpod/paid_worker.py").read_bytes()).hexdigest(),
     }
 
 
-def preflight(api):
+def preflight(api, *, suite="smoke"):
+    limits = policy(suite)
     identity()
-    evidence = provenance()
+    evidence = provenance(suite=suite)
     pods = api.listing("/pods", "pods")
     if any(p.get("env", {}).get(OWNER) == REPOSITORY for p in pods):
         raise RuntimeError("An owned Pod already exists; cleanup and inspect before launch")
@@ -192,7 +242,7 @@ def preflight(api):
             )
             rate = data.get("price", {}).get("secure")
             entry["rate"] = rate if finite(rate) else None
-            cost = quote(rate)
+            cost = quote(rate, suite=suite)
             regions = sorted(
                 d["id"]
                 for d in data.get("dataCenters", [])
@@ -221,7 +271,8 @@ def preflight(api):
     save("preflight.json", evidence)
     if not choices:
         raise RuntimeError("No approved GPU with verified price/capacity")
-    rate, name, regions, cost = min(choices)
+    preferred = [c for c in choices if c[1] == "NVIDIA GeForce RTX 4090"]
+    rate, name, regions, cost = min(preferred or choices) if suite == "pilot" else min(choices)
     evidence.update(
         status="preflight_passed",
         read_only=True,
@@ -230,14 +281,27 @@ def preflight(api):
         min_cuda_version=MIN_CUDA_BY_GPU[name],
         regions=regions,
         cost=cost,
-        budget=budget(api, reserve=max(1, rate + DISK_HOURLY)),
+        budget=budget(
+            api,
+            reserve=(limits.approved_usd - limits.prior_usd)
+            if suite == "pilot"
+            else max(1, rate + DISK_HOURLY),
+            horizon_hours=(cost["work_seconds"] + limits.cleanup_seconds) / 3600
+            if suite == "pilot"
+            else 1,
+        ),
+        plan=workload_plan(suite),
+        selection_reason=("preferred_4090" if preferred else "lowest_available_approved_rate")
+        if suite == "pilot"
+        else "lowest_available_approved_rate",
         checked_epoch=time.time(),
     )
     save("preflight.json", evidence)
     return evidence
 
 
-def authorization_guard(*, require_marker=True):
+def authorization_guard(*, require_marker=True, suite="smoke"):
+    limits = policy(suite)
     run = identity()
     if (
         os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
@@ -245,7 +309,7 @@ def authorization_guard(*, require_marker=True):
         or os.environ.get("GITHUB_RUN_ATTEMPT") != "1"
         or os.environ.get("CONFIRM_PAID") != "true"
         or os.environ.get("EXPECTED_SHA") != git("rev-parse", "HEAD")
-        or time.time() >= AUTHORIZATION_EXPIRES
+        or time.time() >= limits.expires
     ):
         raise RuntimeError("Manual authorization/ref/SHA/attempt/expiry guard failed")
     # A persisted Actions artifact consumes this one-off authorization before POST /pods.
@@ -262,20 +326,20 @@ def authorization_guard(*, require_marker=True):
         data = request(
             base
             + "/actions/artifacts?"
-            + urllib.parse.urlencode({"name": MARKER, "per_page": 100, "page": page}),
+            + urllib.parse.urlencode({"name": limits.marker, "per_page": 100, "page": page}),
             token=token,
         )
         artifacts = data.get("artifacts")
         if not isinstance(artifacts, list):
             raise RuntimeError("Cannot verify authorization ledger")
         for artifact in artifacts:
-            if artifact.get("name") != MARKER:
+            if artifact.get("name") != limits.marker:
                 continue
             artifact_run = str(artifact.get("workflow_run", {}).get("id"))
             if artifact_run == run:
                 marker_seen = True
             elif (
-                RECONCILED_MARKERS.get(artifact_run) != artifact.get("id")
+                dict(limits.reconciled_markers).get(artifact_run) != artifact.get("id")
                 or artifact.get("id") is None
             ):
                 raise RuntimeError("An unreconciled attempt already consumed this authorization")
@@ -287,25 +351,29 @@ def authorization_guard(*, require_marker=True):
         raise RuntimeError("Authorization marker must be uploaded before create")
 
 
-def owned(pod, state):
+def owned(pod, state, *, suite="smoke"):
+    limits = policy(suite)
     env = pod.get("env", {})
     return (
         pod.get("name") == state["name"]
         and env.get(OWNER) == REPOSITORY
         and env.get("FAAC_RUN_ID") == state["run_id"]
-        and env.get("FAAC_AUTHORIZATION") == AUTHORIZATION
+        and env.get("FAAC_AUTHORIZATION") == limits.authorization
         and (not state.get("pod_id") or pod.get("id") == state["pod_id"])
     )
 
 
-def cleanup(api):
+def cleanup(api, *, suite="smoke"):
+    limits = policy(suite)
     path = OUT / "provision.json"
     run = identity()
     state = (
         json.loads(path.read_text())
         if path.exists()
-        else {"name": AUTHORIZATION + "-" + run, "run_id": run, "pod_id": None}
+        else {"name": limits.authorization + "-" + run, "run_id": run, "pod_id": None}
     )
+    if state["run_id"] != run or state["name"] != limits.authorization + "-" + run:
+        raise RuntimeError("Cleanup state does not belong to this run/authorization")
     # Invalidate any earlier success before querying inventory again.
     save("cleanup.json", {"status": "unknown", "name": state["name"]})
     absent_checks = 0
@@ -339,19 +407,20 @@ def cleanup(api):
                     evidence.update(
                         elapsed_billing_bound_s=elapsed,
                         estimated_total_usd=estimate,
-                        within_budget=estimate <= 1,
+                        within_budget=estimate <= limits.approved_usd,
+                        within_time=elapsed + limits.prior_seconds <= limits.total_seconds,
                         persistent_volumes_created=False,
                         cost_basis="conservative_intent_to_absence_estimate_not_invoice",
                     )
                 else:
                     evidence["cost"] = "unverified_no_local_intent"
                 save("cleanup.json", evidence)
-                if evidence.get("within_budget") is False:
+                if evidence.get("within_budget") is False or evidence.get("within_time") is False:
                     raise RuntimeError("Estimated spend exceeded authorization")
                 return
         else:
             absent_checks = 0
-            if len(matches) != 1 or not owned(matches[0], state):
+            if len(matches) != 1 or not owned(matches[0], state, suite=suite):
                 raise RuntimeError("Cleanup ownership mismatch; refusing unrelated deletion")
             pod_id = matches[0].get("id", "")
             if not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", pod_id):
@@ -364,7 +433,7 @@ def cleanup(api):
                     raise RuntimeError("Invalid recovered start time")
                 state.update(
                     started_epoch=started,
-                    cost=quote(float(matches[0]["env"]["FAAC_RATE"])),
+                    cost=quote(float(matches[0]["env"]["FAAC_RATE"]), suite=suite),
                 )
             state["pod_id"] = pod_id
             save("provision.json", state)
@@ -378,7 +447,8 @@ def cleanup(api):
     raise RuntimeError("Owned Pod removal not verified; inspect immediately")
 
 
-def download(url, token, expected, inline=None):
+def download(url, token, expected, inline=None, *, suite="smoke"):
+    policy(suite)
     size, digest = expected.get("size"), expected.get("sha256")
     if (
         type(size) is not int
@@ -401,7 +471,7 @@ def download(url, token, expected, inline=None):
         response = io.BytesIO(base64.b64decode(inline, validate=True))
     else:
         response = urllib.request.build_opener(NoRedirect).open(req, timeout=30)
-    path = OUT / "smoke.tar.gz"
+    path = OUT / f"{suite}.tar.gz"
     hasher, count = hashlib.sha256(), 0
     with response, path.open("wb") as f:
         while block := response.read(1024 * 1024):
@@ -422,16 +492,18 @@ def interrupt(signum, frame):
     raise Deadline("Work deadline or cancellation; begin cleanup")
 
 
-def launch(api):
-    authorization_guard()
-    evidence = preflight(api)
+def launch(api, *, suite="smoke"):
+    limits = policy(suite)
+    plan = workload_plan(suite)
+    authorization_guard(suite=suite)
+    evidence = preflight(api, suite=suite)
     run = identity()
     token = secrets.token_urlsafe(32)
     print("::add-mask::" + token, flush=True)
     started = time.time()
     deadline = started + evidence["cost"]["work_seconds"]
     state = {
-        "name": AUTHORIZATION + "-" + run,
+        "name": limits.authorization + "-" + run,
         "run_id": run,
         "started_epoch": started,
         "deadline_epoch": deadline,
@@ -439,6 +511,7 @@ def launch(api):
         "pod_id": None,
     }
     save("provision.json", state)  # durable intent BEFORE the only create request
+    print("Phase: allocation/image startup; work deadline includes this time", flush=True)
     worker = base64.b64encode((ROOT / "runpod/paid_worker.py").read_bytes()).decode()
     code = (
         "import base64;exec(compile(base64.b64decode("
@@ -465,9 +538,10 @@ def launch(api):
         "env": {
             OWNER: REPOSITORY,
             "FAAC_RUN_ID": run,
-            "FAAC_AUTHORIZATION": AUTHORIZATION,
+            "FAAC_AUTHORIZATION": limits.authorization,
+            "FAAC_SUITE": suite,
             "FAAC_RESULT_TOKEN": token,
-            "FAAC_DEADLINE": str(deadline - 90),
+            "FAAC_DEADLINE": str(deadline - limits.transfer_seconds),
             "FAAC_SOURCE_SHA": SOURCE,
             "FAAC_CONFIG_SHA": evidence["config_sha256"],
             "FAAC_CONTROLLER_SHA": evidence["controller_sha"],
@@ -498,7 +572,7 @@ def launch(api):
         save("provision.json", state)
         detail = api.call("/pods/" + pod_id)
         if (
-            not owned(detail, state)
+            not owned(detail, state, suite=suite)
             or detail.get("gpu", {}).get("id") != evidence["gpu"]
             or detail.get("dataCenterId") not in evidence["regions"]
             or not finite(detail.get("cost"), 0.001)
@@ -515,21 +589,44 @@ def launch(api):
             },
         )
         url = "https://" + pod_id + "-8888.proxy.runpod.net"
+        previous_progress = None
         while time.time() < deadline - 35:
             try:
                 result = request(url + "/result", token=token)
             except RuntimeError:
                 time.sleep(10)
                 continue
+            if result.get("status") == "running":
+                progress = {"phase": "worker_running"}
+                phase = result.get("phase", "")
+                if isinstance(phase, str) and (
+                    phase
+                    in {"worker_startup", "preflight", "gpu_correctness", "analysis", "complete"}
+                    or re.fullmatch(
+                        r"(?:confirmations/)?cases/[a-z0-9_]+/(?:grid|random|tpe)-seed-[0-9]+",
+                        phase,
+                    )
+                ):
+                    progress["phase"] = phase
+                for key in ("completed_studies", "completed_confirmations", "gpu_test_count"):
+                    value = result.get(key)
+                    if type(value) is int and 0 <= value <= 1000:
+                        progress[key] = value
+                if progress != previous_progress:
+                    save("progress.json", progress)
+                    print(json.dumps(progress), flush=True)
+                    previous_progress = progress
             if result.get("status") in {"accepted", "rejected", "partial"}:
                 # Worker returns only explicit evidence fields, never its environment.
                 save("result.json", result)
                 if result.get("archive"):
+                    print("Phase: result transfer and independent CPU verification", flush=True)
                     download(
                         url + "/archive",
                         token,
                         result["archive"],
                         result.get("archive_inline_base64"),
+                        suite=suite,
                     )
                 if result.get("status") != "accepted":
                     raise RuntimeError("GPU experiment did not pass all acceptance gates")
@@ -537,19 +634,21 @@ def launch(api):
                     result.get("source_sha") != SOURCE
                     or result.get("config_sha256") != evidence["config_sha256"]
                     or result.get("controller_sha") != evidence["controller_sha"]
-                    or result.get("studies") != 18
+                    or result.get("studies") != plan["studies"]
                     or result.get("gpu_tests", 0) < 25
-                    or result.get("confirmations") != 18
-                    or result.get("paired_workers") != 108
-                    or not (OUT / "smoke.tar.gz").is_file()
+                    or result.get("confirmations") != plan["confirmations"]
+                    or result.get("paired_workers") != plan["paired_workers"]
+                    or not (OUT / f"{suite}.tar.gz").is_file()
                 ):
                     raise RuntimeError("Result provenance/completeness mismatch")
                 from runpod.verify_paid import verify_archive
 
-                confirmation_counts = verify_archive(OUT / "smoke.tar.gz")
+                confirmation_counts = verify_archive(
+                    OUT / f"{suite}.tar.gz", suite=suite, expected_gpu=evidence["gpu"]
+                )
                 save(
                     "acceptance.json",
-                    {"status": "accepted", "archive_verified": True, **confirmation_counts},
+                    {"status": "accepted", "archive_verified": True, **plan, **confirmation_counts},
                 )
                 return
             time.sleep(10)
@@ -558,26 +657,36 @@ def launch(api):
         signal.alarm(0)
         for s, handler in handlers.items():
             signal.signal(s, handler)
-        cleanup(api)
+        print("Phase: owned Pod cleanup", flush=True)
+        cleanup(api, suite=suite)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("authorize", "preflight", "run", "cleanup"))
+    parser.add_argument("mode", choices=("plan", "authorize", "preflight", "run", "cleanup"))
+    parser.add_argument("--suite", choices=("smoke", "pilot"), default="smoke")
+    parser.add_argument("--rate", type=float, default=MAX_RATE, help="Hypothetical plan rate only")
     args = parser.parse_args()
+    if args.mode == "plan":
+        print(
+            json.dumps(
+                {**workload_plan(args.suite), "cost": quote(args.rate, suite=args.suite)}, indent=2
+            )
+        )
+        return
     identity()
     if args.mode == "authorize":
         # Read GitHub only, before recording a new attempt. launch() still checks
         # the full guard with the current marker immediately before preflight/create.
-        authorization_guard(require_marker=False)
+        authorization_guard(require_marker=False, suite=args.suite)
         return
     api = Runpod()
     if args.mode == "preflight":
-        preflight(api)
+        preflight(api, suite=args.suite)
     elif args.mode == "cleanup":
-        cleanup(api)
+        cleanup(api, suite=args.suite)
     else:
-        launch(api)
+        launch(api, suite=args.suite)
 
 
 if __name__ == "__main__":

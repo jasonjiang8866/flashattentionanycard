@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path("/opt/bo-kernel-tuner")
+SUITE = "smoke"
 OUTPUT = Path("/tmp/faac-smoke")
 ARCHIVE = OUTPUT.with_suffix(".tar.gz")
 RESULT = {"status": "running"}
@@ -26,7 +28,7 @@ def suite_command():
         sys.executable,
         "-m",
         "runpod.launch",
-        "smoke",
+        SUITE,
         "--output",
         str(OUTPUT),
         "--confirm-repetitions",
@@ -42,6 +44,33 @@ def digest(path):
     return value.hexdigest()
 
 
+def progress():
+    """Only allowlisted counters/phase leave the running worker, never raw logs."""
+    result = dict(RESULT)
+    if result.get("status") != "running":
+        return result
+    result["phase"] = "worker_startup"
+    try:
+        state = json.loads((OUTPUT / "status.json").read_text())
+        if not isinstance(state, dict):
+            return result
+        phase = state.get("phase", "")
+        if isinstance(phase, str) and (
+            phase in {"preflight", "gpu_correctness", "analysis", "complete"}
+            or re.fullmatch(
+                r"(?:confirmations/)?cases/[a-z0-9_]+/(?:grid|random|tpe)-seed-[0-9]+", phase
+            )
+        ):
+            result["phase"] = phase
+        for key in ("completed_studies", "completed_confirmations", "gpu_test_count"):
+            value = state.get(key)
+            if type(value) is int and 0 <= value <= 1000:
+                result[key] = value
+    except (OSError, ValueError, TypeError):
+        pass  # A status file may be between atomic writes during startup/exit.
+    return result
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -51,7 +80,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(403)
             return
         if self.path == "/result":
-            data = json.dumps(RESULT, allow_nan=False).encode()
+            data = json.dumps(progress(), allow_nan=False).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
@@ -82,7 +111,7 @@ def work():
     try:
         if (ROOT / "SOURCE_REVISION").read_text().strip() != source:
             raise RuntimeError("image_revision_mismatch")
-        if digest(ROOT / "runpod/configs/smoke.json") != config_hash:
+        if digest(ROOT / f"runpod/configs/{SUITE}.json") != config_hash:
             raise RuntimeError("configuration_mismatch")
         remaining = float(os.environ["FAAC_DEADLINE"]) - time.time()
         if remaining < 60:
@@ -129,7 +158,7 @@ def work():
         )
 
         manifest = json.loads((OUTPUT / "manifest.json").read_text())
-        config = load_config("smoke")
+        config = load_config(SUITE)
         if (
             manifest["source_revision"] != source
             or manifest["config"] != config
@@ -198,7 +227,12 @@ def work():
 
 
 def main():
-    global TOKEN
+    global TOKEN, SUITE, OUTPUT, ARCHIVE
+    SUITE = os.environ.get("FAAC_SUITE", "smoke")
+    if SUITE not in {"smoke", "pilot"}:
+        raise ValueError("Unsupported paid suite")
+    OUTPUT = Path("/tmp/faac-" + SUITE)
+    ARCHIVE = OUTPUT.with_suffix(".tar.gz")
     TOKEN = os.environ.pop("FAAC_RESULT_TOKEN")
     server = ThreadingHTTPServer(("0.0.0.0", 8888), Handler)
     threading.Thread(target=work, daemon=True).start()

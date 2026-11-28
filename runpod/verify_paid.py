@@ -16,7 +16,10 @@ from runpod.verify_m1 import verify_confirmations
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def verify_archive(archive):
+def verify_archive(archive, *, suite="smoke", expected_gpu=None):
+    if suite not in {"smoke", "pilot"}:
+        raise ValueError("Unsupported paid suite")
+    archive_root = "faac-" + suite
     with tempfile.TemporaryDirectory() as temporary:
         destination = Path(temporary)
         seen, size = set(), 0
@@ -28,7 +31,8 @@ def verify_archive(archive):
                     or name.is_absolute()
                     or ".." in name.parts
                     or not name.parts
-                    or name.parts[0] != "faac-smoke"
+                    or name.as_posix() != member.name.rstrip("/")
+                    or name.parts[0] != archive_root
                     or member.name in seen
                     or not (member.isdir() or member.isfile())
                 ):
@@ -43,7 +47,7 @@ def verify_archive(archive):
                     with tar.extractfile(member) as source, target.open("wb") as f:
                         while block := source.read(1024 * 1024):
                             f.write(block)
-        output = destination / "faac-smoke"
+        output = destination / archive_root
         checksums = json.loads((output / "checksums.json").read_text())
         actual = {
             str(p.relative_to(output)): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -52,16 +56,16 @@ def verify_archive(archive):
         }
         if not actual or actual != checksums:
             raise RuntimeError("Result member checksum mismatch")
-        config = load_config("smoke")
+        config = load_config(suite)
         plan = make_plan(config)
-        if json.loads((output / "plan.json").read_text()) != plan or len(plan) != 18:
+        if json.loads((output / "plan.json").read_text()) != plan:
             raise RuntimeError("Unexpected study plan")
         state = json.loads((output / "status.json").read_text())
         if (
             state.get("status") != "complete"
             or state.get("gpu_validation_passed") is not True
             or state.get("gpu_tests_passed") is not True
-            or state.get("completed_studies") != 18
+            or state.get("completed_studies") != len(plan)
         ):
             raise RuntimeError("Incomplete GPU results")
         validate_junit(output / "gpu-tests.xml")
@@ -81,6 +85,11 @@ def verify_archive(archive):
             != hashlib.sha256((ROOT / "runpod/launch.py").read_bytes()).hexdigest()
         ):
             raise RuntimeError("Workload provenance mismatch")
+        if expected_gpu is not None and manifest.get("hardware", {}).get("name") != expected_gpu:
+            raise RuntimeError("Archive GPU does not match allocated GPU")
+        expected_studies = {output / item["path"] / "result.json" for item in plan}
+        if set((output / "cases").rglob("result.json")) != expected_studies:
+            raise RuntimeError("Unexpected search study set")
         versions = manifest.get("versions", {})
         if versions.get("torch") != "2.9.0+cu128" or versions.get("triton") != "3.5.0":
             raise RuntimeError("Unexpected CUDA software versions")
@@ -99,6 +108,12 @@ def verify_archive(archive):
                 "code_fingerprint": fingerprint.hexdigest(),
             }
             verify_study(output / item["path"], expected)
+            if suite == "pilot":
+                result = json.loads((output / item["path"] / "result.json").read_text())
+                if result["attempts"] != expected["budget"] or [
+                    t["number"] for t in result["trials"]
+                ] != list(range(expected["budget"])):
+                    raise RuntimeError("Pilot did not consume the declared equal attempt budget")
         confirmation_counts = verify_confirmations(output, plan, manifest, state)
         for case in config["cases"]:
             folder = output / "figures" / case["id"]
@@ -113,3 +128,17 @@ def verify_archive(archive):
                 if not files or any(not p.stat().st_size for p in files):
                     raise RuntimeError("Missing report")
         return confirmation_counts
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("archive", type=Path)
+    parser.add_argument("--suite", choices=("smoke", "pilot"), default="smoke")
+    args = parser.parse_args()
+    print(json.dumps(verify_archive(args.archive, suite=args.suite)))
+
+
+if __name__ == "__main__":
+    main()
