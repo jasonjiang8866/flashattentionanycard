@@ -6,14 +6,26 @@
 本项目位于 `flashattentionanycard` 仓库；当前实现 GEMM、Fused RMSNorm 和 MoE grouped GEMM。
 目标平台为 Linux + NVIDIA CUDA、compute capability 8.0 及以上，包括 Ampere 与 Blackwell。
 
-**M0 已通过真实 GPU smoke 验收：19 项测试、18 项 study、36 次尝试，Pod 独立清理确认完成。**
-[验收记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43743010737)运行于 PRO 6000 Blackwell MIG 24GB。
-这证明当时版本的执行链路；吞吐优势、迁移收益及新增 M1 代码仍需目标 GPU 实测。
+## 项目进度
 
-**M1 新增 PyTorch 基线与最佳配置独立复测入口**：GEMM、RMSNorm、MoE 使用同一计时协议，
-冻结搜索赢家后以新输入 seed、交替执行顺序进行配对复测，独立保存样本和可复验报告。
-使用方法、额外运行预算及验收条件见 [M1 测量协议](runpod/MEASUREMENT.md)。
-M1 镜像已发布，付费入口的固定版本、复测验收及费用记录见 [M1 验收衔接](runpod/M1_ACCEPTANCE.md)；真实 GPU 验收待执行。
+更新于 **2026-11-27（新加坡时间）**。**M1 已于 2026-11-17（新加坡时间）通过真实 GPU smoke 验收**：
+25 项 GPU 测试通过、零跳过，18 项搜索 study 完成；18 个冻结后的最佳配置各完成 6 次独立的
+candidate/PyTorch 配对复测，共 **108 个配对 worker**。
+
+| 里程碑 | 已验证状态 | 证据 / 下一项交付 |
+|---|---|---|
+| M0：执行链路 | PRO 6000 Blackwell MIG 24GB 验收通过；19 项 GPU 测试、18 项 study、36 次尝试 | [M0 运行](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43743010737) |
+| M1：PyTorch 基线与独立复测 | 同型号 GPU 验收通过；下载产物及原始样本推导的统计已独立复验 | [M1 运行](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43917307722)、[独立清理](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43920030853) |
+| 下一阶段：大 shape 与跨 GPU pilot | 已规划；尚无 pilot 性能或迁移结果 | [Pilot 协议](runpod/PILOT.md)、[开发顺序与验收条件](runpod/M1_ACCEPTANCE.md#next-development-slice) |
+
+M1 临时 Pod 已删除，并经独立流程确认不存在。本次 GPU 与临时磁盘费用保守估算 **$0.18**，
+累计预留估算更新为 **$0.41**；两者均非供应商账单。控制器原执行窗口已于
+**2026-11-23 08:00（新加坡时间）**到期；台账对账不延长执行授权。
+
+本次只覆盖单设备、单会话的小型合成 workload，尚不能证明跨卡可移植性、TPE 优势、迁移收益或生产规模加速。
+GEMM FP16 在本次 smoke 中慢于 PyTorch 基线；包括退步结果在内的全部 case 均保留于
+[验收记录](runpod/M1_ACCEPTANCE.md)。冻结赢家、新输入 seed、交替执行顺序、原始样本和统计边界见
+[M1 测量协议](runpod/MEASUREMENT.md)。
 
 ## RunPod 一键实验
 

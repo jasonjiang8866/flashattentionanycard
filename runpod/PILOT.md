@@ -4,6 +4,12 @@
 测量协议、三种 sampler、结果验证和 study 级恢复；默认入口仍为 smoke，performance 配置不变。
 本文件是实验方案，**没有真实 CUDA 性能结果**。CPU 测试和 dry-run 不能证明目标硬件可用或更快。
 
+2026-11-27 SGT 更新：M1 已在 PRO 6000 Blackwell MIG 24GB 通过小型 smoke，
+25 项 GPU 测试、18 项 study、108 个配对 worker 及独立清理均已验证，见
+[M1 验收记录](M1_ACCEPTANCE.md)。这不是本 pilot 的验收，也不代表 3090/5090 已通过。
+后续 pilot 显式开启 `--confirm-repetitions 6`；受预算约束的 pilot 控制器尚待开发，
+现有付费 smoke 工作流不能直接用于本计划，且原授权窗口已过期。
+
 ## 固定协议与候选预算
 
 | Workload | Shape / dtype | 搜索空间 | 每方法、每 seed 的 attempts | TPE startup |
@@ -34,6 +40,10 @@ RMSNorm 不足以代表大空间中的 BO 收敛，仅作小空间对照。
 | 目标卡 cold + warm pilot | 16 | 288 |
 | 3090 cold + 5090 cold/warm（推荐迁移路线） | 28 | 504 |
 
+启用六次独立配对复测后，单卡 cold 另需 72 个 paired worker，目标 cold+warm 另需 96 个；
+上述推荐迁移路线共需 168 个。每个 paired worker 的 timeout 同为 60 秒；
+需在搜索之外另计复测、GPU 测试、启动、传输和清理的总预算。不能直接沿用 smoke 时限。
+
 单卡 cold 的 worker timeout 之和为 12,960 秒（3.6 小时），目标 cold/warm 为 17,280 秒（4.8 小时）。
 这只是极端情况下的 worker 时间额度，**不是预期时长或整套运行上限**；GPU 测试、数据库、
 报告与归档有额外开销。完成后需人工停止收费资源；脚本不会停租。本次开发不创建任何实例。
@@ -41,15 +51,15 @@ RMSNorm 不足以代表大空间中的 BO 收敛，仅作小空间对照。
 
 ## 先 dry-run，再由操作者启动
 
-在两台独立 Linux 主机上使用相同的镜像 digest（2026-11-05 SGT 已发布）：
+在两台独立 Linux 主机上使用相同的当前 M1 镜像 digest：
 
 ```text
-ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:f054f0edf82a8de9e2ff08589472dc91a399b5d89c469384dd0a6c988f9a1501
+ghcr.io/jasonjiang8866/flashattentionanycard-runpod@sha256:972e5e3fbfbc80fde96cbfadfd117e5501fa81d6ce4899295dc8122af632f37d
 ```
 
-镜像源码和 revision label 均为 `d53afd9aa6f3ce68ac896db0924558d1fe72ffe7`；
-[发布证据](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/41934750064) 与完整离线验证说明见 [README.md](README.md#当前实验镜像2026-11-05)。
-本镜像包含 PR #9 的 GPU-test device-selection 修复，尚待真实 GPU 验收。
+镜像源码和 revision label 均为 `f979f1af25b5e9e4a3254ec2e195cf681c61e84d`；
+[发布证据](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43898896512) 与完整离线验证说明见 [README.md](README.md#当前-m1-实验镜像)。
+本镜像包含 GPU-test device-selection 修复、PyTorch 基线与独立复测，已通过上述 MIG smoke。
 旧 2026-10-30 和 2026-10-28 digest 仅供历史复现；后者不含 pilot。
 镜像内工作目录为 `/opt/bo-kernel-tuner`，配置为 `runpod/configs/pilot.json`。
 Docker 无 GPU dry-run 命令见 README；必须覆盖默认 CMD，避免自动启动真实实验。
@@ -59,8 +69,8 @@ Docker 无 GPU dry-run 命令见 README；必须覆盖默认 CMD，避免自动�
 ```bash
 git clone https://github.com/jasonjiang8866/flashattentionanycard.git
 cd flashattentionanycard
-git checkout --detach d53afd9aa6f3ce68ac896db0924558d1fe72ffe7
-python -m runpod.launch pilot --dry-run --output /workspace/results/3090-pilot
+git checkout --detach f979f1af25b5e9e4a3254ec2e195cf681c61e84d
+python -m runpod.launch pilot --confirm-repetitions 6 --dry-run --output /workspace/results/3090-pilot
 # 以下安装及真实 smoke 仅供后续由操作者在 GPU 主机上执行，本次未执行：
 # bash runpod/bootstrap.sh smoke --output /workspace/results/smoke-01
 ```
@@ -71,11 +81,11 @@ torch 2.9.0+cu128、CUDA runtime 12.8、Triton 3.5.0，实际兼容性仍待两�
 以下命令从仓库根目录运行。dry-run 不导入 torch/triton，不创建实验目录，也不检查真实 CUDA。
 
 ```bash
-python -m runpod.launch pilot --dry-run --output /workspace/results/3090-pilot
-python -m runpod.launch runpod/configs/pilot.json --dry-run --output /workspace/results/5090-pilot
+python -m runpod.launch pilot --confirm-repetitions 6 --dry-run --output /workspace/results/3090-pilot
+python -m runpod.launch runpod/configs/pilot.json --confirm-repetitions 6 --dry-run --output /workspace/results/5090-pilot
 
 # 仅规划后续迁移；源结果内容、精度及目标 GPU 合法性会在真实执行 preflight 验证。
-python -m runpod.launch pilot --dry-run \
+python -m runpod.launch pilot --confirm-repetitions 6 --dry-run \
   --source-run /workspace/imported/3090-pilot --source-seed 0 --top-k 3 \
   --output /workspace/results/5090-pilot-transfer
 ```
@@ -86,19 +96,21 @@ python -m runpod.launch pilot --dry-run \
 
 通过镜像环境变量启动时，cold 设 `BO_SUITE=pilot`；迁移另设 `BO_SOURCE_DIR` 和
 `BO_TOP_K=3`（source seed 默认 0），使用新的 `BO_OUTPUT_DIR`。默认 top-k=5 不用于此协议。
+这些环境变量本身不开启复测；执行本 M1 pilot 协议应使用下列显式传入
+`--confirm-repetitions 6` 的命令。
 
 以下是**后续真实运行命令，本次未执行**。先单独通过两卡的 smoke，再运行 pilot；
-pilot 自身也保留完整 19 项 GPU 测试门禁，不会跳过精度验证。
+当前 M1 镜像中的 pilot 自身也保留完整 25 项 GPU 测试门禁，不会跳过精度验证。
 
 ```bash
 # RTX 3090 主机，已安装同版本环境后
-bash runpod/run.sh pilot --device 0 --output /workspace/results/3090-pilot
+bash runpod/run.sh pilot --confirm-repetitions 6 --device 0 --output /workspace/results/3090-pilot
 
 # RTX 5090 主机：独立 cold pilot，可选路线
-bash runpod/run.sh pilot --device 0 --output /workspace/results/5090-pilot
+bash runpod/run.sh pilot --confirm-repetitions 6 --device 0 --output /workspace/results/5090-pilot
 
 # 或：将 3090 的完整结果包复制并解压到另一台主机后，一次运行 cold + warm
-bash runpod/run.sh pilot --device 0 \
+bash runpod/run.sh pilot --confirm-repetitions 6 --device 0 \
   --source-run /workspace/imported/3090-pilot --source-seed 0 --top-k 3 \
   --output /workspace/results/5090-pilot-transfer
 

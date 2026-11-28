@@ -1,5 +1,13 @@
 # M1: PyTorch baselines and independent winner confirmation
 
+M1 passed on **2026-11-17 SGT**:
+[GPU run 43917307722](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43917307722)
+executed 25 GPU tests with zero skips, 18 studies and 108 paired workers on PRO 6000
+Blackwell MIG 24GB. Downloaded evidence was independently verified, and
+[recovery 43920030853](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43920030853)
+confirmed cleanup. See [the acceptance record](M1_ACCEPTANCE.md) for all measured
+cases, artifact hashes, costs and the remaining single-device/small-workload limits.
+
 M0 passed on 2026-11-16 SGT: [GPU run 43743010737](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43743010737),
 19 GPU tests, 18 studies and 36 attempts on PRO 6000 Blackwell MIG 24GB.
 The [independent cleanup run](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43743491986)
@@ -56,7 +64,8 @@ Search-best latency remains a separate field; confirmation does not reselect a w
 The [M1 image publication](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43898896512)
 contains this protocol at `f979f1af25b5e9e4a3254ec2e195cf681c61e84d`.
 See [M1_ACCEPTANCE.md](M1_ACCEPTANCE.md) for the controller/image handoff, fixed
-six-pair acceptance and cost ledger. Publication is offline validation, not real GPU acceptance.
+six-pair acceptance and cost ledger. Image publication and the subsequent real-GPU
+acceptance are separate evidence records.
 
 ```bash
 # CPU-only plan: preserves the 18-study / 36-attempt smoke design and adds 108 pair workers.
@@ -119,8 +128,9 @@ baseline/graph tests (three operators × FP16/BF16). CPU numerical tests exercis
 baselines with real PyTorch, including empty experts and ragged/single-element shapes;
 they do not claim CUDA graph execution.
 
-M1 GPU acceptance still requires a new-image run with 25 executed GPU tests, zero skips,
-all declared studies/confirmations verified, and independently verified Pod cleanup.
+The accepted M1 smoke met the 25-test, zero-skip, complete-study/confirmation and
+independent-cleanup gates. Future runs must meet their declared gates again;
+this result does not validate the larger pilot or another GPU.
 
 ## API references (pinned runtime)
 

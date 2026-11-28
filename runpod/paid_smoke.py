@@ -69,14 +69,20 @@ MARKER = "runpod-authorization-" + AUTHORIZATION
 # Full intent-to-independent-absence interval: 318.414016 s, $0.061555832
 # incremental GPU+disk. Round $0.16 + this estimate up to $0.23; not an invoice.
 # Result artifact 14173576818 / recovery 14173507312 hashes in GPU_SMOKE.md.
+# M1 run 43917307722 accepted; recovery 43920030853 verified absence.
+# Full intent-to-independent-absence interval: 923.064658 s, $0.178446957
+# incremental GPU+disk. Round $0.23 + this estimate up to $0.41; not an invoice.
+# Result 14254340944 / recovery 14252468356 hashes in M1_ACCEPTANCE.md.
+# Reconciliation does not extend AUTHORIZATION_EXPIRES or permit a new workload.
 RECONCILED_MARKERS = {
     "41577245210": 13204770313,
     "41668287039": 13245909643,
     "41675121064": 13249184469,
     "41686672779": 13254599148,
     "43743010737": 14173177303,
+    "43917307722": 14250806483,
 }
-PRIOR_SPEND_RESERVE = 0.23
+PRIOR_SPEND_RESERVE = 0.41
 
 
 def save(name, value):

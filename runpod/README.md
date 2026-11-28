@@ -4,6 +4,11 @@
 受预算约束的 M1 手动 Actions 创建/清理与验收入口见 [M1_ACCEPTANCE.md](M1_ACCEPTANCE.md)，
 历史 M0 记录见 [GPU_SMOKE.md](GPU_SMOKE.md)，测量协议见 [MEASUREMENT.md](MEASUREMENT.md)。
 
+**最新进度（2026-11-27 SGT）：M1 已于 2026-11-17 SGT 在 PRO 6000 Blackwell MIG 24GB 验收通过。**
+25 项 GPU 测试零跳过，18 项 study 和 108 个配对 worker 的产物已独立复验；临时 Pod 独立清理确认完成。
+累计费用预留估算为 $0.41，原执行窗口已于 2026-11-23 08:00 SGT 到期。
+下一步是准备有独立预算与验收条件的大 shape pilot；现有 smoke 控制器不能直接启动 pilot。
+
 ## 1. 最快入口：在现有 RunPod GPU Pod 中执行
 
 选择 Linux x86_64、NVIDIA Ampere 或更新 GPU，使用能够打开终端的 RunPod PyTorch 模板。
@@ -184,7 +189,9 @@ gh run list --repo "$REPO" --workflow runpod.yml --event workflow_dispatch --lim
 
 [发布与核验记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43898896512)
 在推送前完成 `pip check`、smoke dry-run 和 **156 项完整离线测试（25 项 GPU 测试未选中，无跳过）**，
-随后核对远端 digest、按 digest 拉取并检查 OCI revision label。真实 CUDA 验收仍待执行。
+随后核对远端 digest、按 digest 拉取并检查 OCI revision label。
+后续 [真实 CUDA 验收](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/43917307722)
+已通过，范围为上述单卡 smoke；完整证据见 [M1_ACCEPTANCE.md](M1_ACCEPTANCE.md)。
 
 - 源码 SHA / `org.opencontainers.image.revision`：`f979f1af25b5e9e4a3254ec2e195cf681c61e84d`。
 - SHA 标签：`ghcr.io/jasonjiang8866/flashattentionanycard-runpod:sha-f979f1af25b5e9e4a3254ec2e195cf681c61e84d`。
@@ -228,7 +235,7 @@ docker run --rm --network none --entrypoint /bin/bash "$IMAGE" \
 
 ### 历史镜像（2026-10-28；不含 pilot）
 
-保留该镜像用于旧版复现；**新实验请使用上面的 2026-11-05 digest**。
+保留该镜像用于旧版复现；**新实验请使用上面的当前 M1 digest**。
 不要将旧镜像的 `BO_SUITE` 改成 pilot。
 
 [手动发布与核验记录](https://github.com/jasonjiang8866/flashattentionanycard/actions/runs/40636599094)
@@ -273,6 +280,8 @@ CI 的 Docker 构建/离线编译通过仍不等于真实 GPU 实验已通过。
 
 ## Budget-controlled Actions GPU smoke
 
-Use [GPU_SMOKE.md](GPU_SMOKE.md) for the one-off $1 experiment through the existing
-`RUNPOD_API_KEY` repository secret. This manual workflow reuses the verified image,
-queries current GPU prices, retrieves CUDA evidence and verifies owned Pod cleanup.
+See [M1_ACCEPTANCE.md](M1_ACCEPTANCE.md) for the accepted M1 run and reconciled
+ledger, and [GPU_SMOKE.md](GPU_SMOKE.md) for historical M0 evidence. The manual
+workflow uses the existing `RUNPOD_API_KEY` secret, pinned image and independent
+cleanup. Its authorization window has expired; this documentation update does
+not reopen paid execution.

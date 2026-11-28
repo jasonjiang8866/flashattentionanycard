@@ -417,6 +417,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_expiry_boundary_applies_before_marker_and_before_create(self):
         current = {"name": c.MARKER, "workflow_run": {"id": 1234}, "id": 888}
+        reconciled = {"name": c.MARKER, "workflow_run": {"id": 43917307722}, "id": 14250806483}
         for require_marker in (False, True):
             for offset in (-1, 0, 1):
                 with (
@@ -426,7 +427,10 @@ class ControllerTests(unittest.TestCase):
                     patch.object(
                         c,
                         "request",
-                        side_effect=[{"object": {"sha": "a" * 40}}, {"artifacts": [current]}],
+                        side_effect=[
+                            {"object": {"sha": "a" * 40}},
+                            {"artifacts": [reconciled, current]},
+                        ],
                     ) as read,
                 ):
                     if offset < 0:
@@ -502,8 +506,11 @@ class ControllerTests(unittest.TestCase):
                 c.download("https://test.invalid/archive", "test-token", expected, "a" * 180001)
 
     def test_reconciled_retry_preserves_total_cap(self):
-        self.assertEqual(c.PRIOR_SPEND_RESERVE, 0.23)
-        self.assertGreater(c.PRIOR_SPEND_RESERVE, 0.16 + 0.061555832)
+        # Accepted M1 provision intent through independent recovery, including disk.
+        elapsed = 1794850584.8404558 - 1794849661.7757976
+        cumulative = 0.23 + elapsed * (0.69 + c.DISK_HOURLY) / 3600
+        self.assertGreaterEqual(c.PRIOR_SPEND_RESERVE, cumulative)
+        self.assertLess(c.PRIOR_SPEND_RESERVE - cumulative, 0.01)
         for rate in (0.5, 0.69, 1.5):
             q = c.quote(rate)
             estimate = (
@@ -605,6 +612,10 @@ class ControllerTests(unittest.TestCase):
             (41686672779, 999, False),
             (43743010737, 14173177303, True),
             (43743010737, 999, False),
+            (43917307722, 14250806483, True),
+            (43917307722, 999, False),
+            (43917307722, None, False),
+            (999, 14250806483, False),
         ):
             with self.subTest(run=run, marker=marker):
                 previous = {"name": c.MARKER, "workflow_run": {"id": run}, "id": marker}
